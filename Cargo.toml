@@ -5,10 +5,10 @@ edition = "2021"
 rust-version = "1.75"
 license = "MIT"
 authors = ["Michael Olson <c@mwolson.org>"]
-description = "PATH shims that route npm and pnpm commands through aube when safe"
+description = "PATH shims that route bun, npm, pnpm, and yarn commands through aube when safe"
 repository = "https://github.com/mwolson/aubeshim"
 readme = "README.md"
-keywords = ["aube", "npm", "pnpm", "shim"]
+keywords = ["aube", "bun", "npm", "pnpm", "shim"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
