@@ -20,7 +20,7 @@ fn run() -> Result<()> {
 
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Some(aubeshim::Command::Init { shell, shim_dir }) => {
+        Some(aubeshim::Command::Activate { shell, shim_dir }) => {
             let dir = shim_dir.unwrap_or_else(aubeshim::default_shim_dir);
             print!("{}", aubeshim::shell_init(shell, &dir));
             Ok(())

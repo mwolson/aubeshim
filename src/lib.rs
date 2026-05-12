@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
 
-const SHIM_NAMES: &[&str] = &["npm", "pnpm"];
+const SHIM_NAMES: &[&str] = &["npm", "pnpm", "yarn"];
 
 #[derive(Debug, Parser)]
 #[command(
@@ -22,14 +22,15 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Print shell code that prepends the aubeshim shim directory to PATH
-    Init {
+    #[command(alias = "init")]
+    Activate {
         /// Shell syntax to emit
         shell: Shell,
         /// Shim directory to put on PATH
         #[arg(long, value_name = "DIR")]
         shim_dir: Option<PathBuf>,
     },
-    /// Create npm and pnpm shims that point at this executable
+    /// Create npm, pnpm, and yarn shims that point at this executable
     Install {
         /// Replace existing shim files
         #[arg(long)]
@@ -38,7 +39,7 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         shim_dir: Option<PathBuf>,
     },
-    /// Remove npm and pnpm shims
+    /// Remove npm, pnpm, and yarn shims
     Uninstall {
         /// Directory where package-manager shims were installed
         #[arg(long, value_name = "DIR")]
@@ -64,6 +65,7 @@ pub enum Invocation {
 pub enum ShimTool {
     Npm,
     Pnpm,
+    Yarn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +79,7 @@ pub enum Target {
     Aube,
     RealNpm,
     RealPnpm,
+    RealYarn,
 }
 
 pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
@@ -91,6 +94,7 @@ pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
     match stem.as_str() {
         "npm" => Invocation::Shim(ShimTool::Npm),
         "pnpm" => Invocation::Shim(ShimTool::Pnpm),
+        "yarn" => Invocation::Shim(ShimTool::Yarn),
         _ => Invocation::Manager,
     }
 }
@@ -108,6 +112,7 @@ pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
             target: Target::Aube,
             args: args.to_vec(),
         },
+        ShimTool::Yarn => plan_yarn(args),
     }
 }
 
@@ -129,7 +134,7 @@ pub fn shell_init(shell: Shell, shim_dir: &Path) -> String {
         ),
         Shell::Fish => format!("fish_add_path --prepend {dir}\n"),
         Shell::Sh => format!(
-            "AUBESHIM_SHIM_DIR=${{AUBESHIM_SHIM_DIR:-{dir}}}\ncase \":$PATH:\" in\n    *:\"$AUBESHIM_SHIM_DIR\":*) ;;\n    *) PATH=\"$AUBESHIM_SHIM_DIR:$PATH\" ;;\nesac\nexport PATH\n"
+            "AUBESHIM_SHIM_DIR=${{AUBESHIM_SHIM_DIR:-{dir}}}\n_aubeshim_old_path=$PATH\nPATH=$AUBESHIM_SHIM_DIR\nIFS=:\nfor _aubeshim_path_entry in $_aubeshim_old_path; do\n    if [ \"$_aubeshim_path_entry\" != \"$AUBESHIM_SHIM_DIR\" ]; then\n        PATH=\"$PATH:$_aubeshim_path_entry\"\n    fi\ndone\nunset IFS _aubeshim_old_path _aubeshim_path_entry\nexport PATH\n"
         ),
     }
 }
@@ -213,6 +218,34 @@ fn plan_npm(args: &[OsString]) -> Plan {
     }
 }
 
+fn plan_yarn(args: &[OsString]) -> Plan {
+    let Some(command_idx) = command_index(args) else {
+        return Plan {
+            target: Target::Aube,
+            args: vec![OsString::from("install")],
+        };
+    };
+    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+    let prefix = &args[..command_idx];
+    let rest = &args[command_idx + 1..];
+
+    if yarn_only_command(&command) {
+        return Plan {
+            target: Target::RealYarn,
+            args: args.to_vec(),
+        };
+    }
+
+    let mut out = Vec::with_capacity(args.len());
+    out.extend_from_slice(prefix);
+    out.push(OsString::from(normalize_yarn_command(&command)));
+    out.extend_from_slice(rest);
+    Plan {
+        target: Target::Aube,
+        args: out,
+    }
+}
+
 fn run_plan(plan: Plan) -> Result<ExitStatus> {
     let program = resolve_target(plan.target)?;
     let mut cmd = ProcessCommand::new(&program);
@@ -233,6 +266,7 @@ fn resolve_target(target: Target) -> Result<OsString> {
         Target::Aube => resolve_aube().context("could not find aube"),
         Target::RealNpm => resolve_real_npm().context("could not find real npm"),
         Target::RealPnpm => resolve_real_pnpm().context("could not find real pnpm"),
+        Target::RealYarn => resolve_real_yarn().context("could not find real yarn"),
     }
 }
 
@@ -252,6 +286,12 @@ fn resolve_real_pnpm() -> Option<OsString> {
     env::var_os("AUBESHIM_REAL_PNPM")
         .or_else(|| mise_which("pnpm"))
         .or_else(|| path_which_excluding_shims("pnpm"))
+}
+
+fn resolve_real_yarn() -> Option<OsString> {
+    env::var_os("AUBESHIM_REAL_YARN")
+        .or_else(|| mise_which("yarn"))
+        .or_else(|| path_which_excluding_shims("yarn"))
 }
 
 fn mise_which(tool: &str) -> Option<OsString> {
@@ -384,6 +424,51 @@ fn normalize_npm_command(command: &str) -> &'static str {
         "up" | "upgrade" => "update",
         other => known_aube_name(other),
     }
+}
+
+fn normalize_yarn_command(command: &str) -> String {
+    match command {
+        "info" => "view".to_owned(),
+        "upgrade" | "up" => "update".to_owned(),
+        other => known_yarn_name(other).unwrap_or(other).to_owned(),
+    }
+}
+
+fn known_yarn_name(command: &str) -> Option<&'static str> {
+    match command {
+        "add" => Some("add"),
+        "bin" => Some("bin"),
+        "cache" => Some("cache"),
+        "config" => Some("config"),
+        "create" => Some("create"),
+        "dedupe" => Some("dedupe"),
+        "dlx" => Some("dlx"),
+        "exec" => Some("exec"),
+        "help" => Some("help"),
+        "init" => Some("init"),
+        "install" => Some("install"),
+        "link" => Some("link"),
+        "login" => Some("login"),
+        "logout" => Some("logout"),
+        "outdated" => Some("outdated"),
+        "pack" => Some("pack"),
+        "publish" => Some("publish"),
+        "remove" | "rm" => Some("remove"),
+        "run" => Some("run"),
+        "start" => Some("start"),
+        "test" => Some("test"),
+        "unlink" => Some("unlink"),
+        "version" => Some("version"),
+        "why" => Some("why"),
+        _ => None,
+    }
+}
+
+fn yarn_only_command(command: &str) -> bool {
+    matches!(
+        command,
+        "constraints" | "global" | "node" | "npm" | "plugin" | "set" | "workspaces"
+    )
 }
 
 fn known_aube_name(command: &str) -> &'static str {
@@ -694,6 +779,30 @@ mod tests {
     }
 
     #[test]
+    fn yarn_without_args_installs() {
+        let plan = plan_for(ShimTool::Yarn, &os(&[]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn yarn_run_style_script_passes_to_aube_external_script() {
+        let plan = plan_for(ShimTool::Yarn, &os(&["dev", "--host"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["dev", "--host"]);
+    }
+
+    #[test]
+    fn yarn_only_command_uses_real_yarn() {
+        let plan = plan_for(ShimTool::Yarn, &os(&["plugin", "list"]));
+
+        assert_eq!(plan.target, Target::RealYarn);
+        assert_eq!(strings(&plan.args), vec!["plugin", "list"]);
+    }
+
+    #[test]
     fn shell_init_supports_fish() {
         let init = shell_init(
             Shell::Fish,
@@ -725,19 +834,84 @@ mod tests {
         assert!(init.contains("export PATH=\"$_aubeshim_shim_dir:$PATH\""));
     }
 
+    #[test]
+    fn bash_activation_removes_existing_shim_entries_before_prepending() {
+        let dir = Path::new("/tmp/aubeshim-test");
+        let output = run_shell_activation(
+            "bash",
+            Shell::Bash,
+            dir,
+            "/bin:/tmp/aubeshim-test:/usr/bin:/tmp/aubeshim-test:/sbin",
+        );
+
+        assert_eq!(output, "/tmp/aubeshim-test:/bin:/usr/bin:/sbin");
+    }
+
+    #[test]
+    fn sh_activation_removes_existing_shim_entries_before_prepending() {
+        let dir = Path::new("/tmp/aubeshim-test");
+        let output = run_shell_activation(
+            "sh",
+            Shell::Sh,
+            dir,
+            "/bin:/tmp/aubeshim-test:/usr/bin:/tmp/aubeshim-test:/sbin",
+        );
+
+        assert_eq!(output, "/tmp/aubeshim-test:/bin:/usr/bin:/sbin");
+    }
+
+    #[test]
+    fn zsh_activation_removes_existing_shim_entries_before_prepending() {
+        let dir = Path::new("/tmp/aubeshim-test");
+        let output = run_shell_activation(
+            "zsh",
+            Shell::Zsh,
+            dir,
+            "/bin:/tmp/aubeshim-test:/usr/bin:/tmp/aubeshim-test:/sbin",
+        );
+
+        assert_eq!(output, "/tmp/aubeshim-test:/bin:/usr/bin:/sbin");
+    }
+
     #[cfg(unix)]
     #[test]
     fn install_and_uninstall_shims() {
         let dir = tempfile::tempdir().unwrap();
         let installed = install_shims(dir.path(), false).unwrap();
 
-        assert_eq!(installed.len(), 2);
+        assert_eq!(installed.len(), 3);
         assert!(dir.path().join("npm").is_symlink());
         assert!(dir.path().join("pnpm").is_symlink());
+        assert!(dir.path().join("yarn").is_symlink());
 
         let removed = uninstall_shims(dir.path()).unwrap();
-        assert_eq!(removed.len(), 2);
+        assert_eq!(removed.len(), 3);
         assert!(!dir.path().join("npm").exists());
         assert!(!dir.path().join("pnpm").exists());
+        assert!(!dir.path().join("yarn").exists());
+    }
+
+    fn run_shell_activation(shell: &str, init_shell: Shell, dir: &Path, path: &str) -> String {
+        let script = format!(
+            "{}\nprintf '%s\\n' \"$PATH\"\n",
+            shell_init(init_shell, dir)
+        );
+        let zdotdir = tempfile::tempdir().unwrap();
+        let mut cmd = std::process::Command::new(shell);
+        cmd.arg("-c").arg(script).env("PATH", path);
+        if shell == "zsh" {
+            cmd.env("ZDOTDIR", zdotdir.path());
+        }
+        let output = cmd.output().unwrap();
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim_end()
+            .to_owned()
     }
 }

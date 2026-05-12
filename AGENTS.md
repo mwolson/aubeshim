@@ -2,9 +2,9 @@
 
 ## Project overview
 
-aubeshim is a small Rust command dispatcher. When installed as `npm` or `pnpm`
-on PATH, it routes commands to `aube` where the command shape is compatible and
-falls back to the real package manager otherwise.
+aubeshim is a small Rust command dispatcher. When installed as `npm`, `pnpm`,
+or `yarn` on PATH, it routes commands to `aube` where the command shape is
+compatible and falls back to the real package manager otherwise.
 
 ## Conventions
 

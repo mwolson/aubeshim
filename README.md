@@ -17,6 +17,8 @@ auto-install checks without editing each project's scripts.
   to the real npm.
 - `pnpm` commands pass through to `aube`, since aube already presents a
   pnpm-compatible command surface.
+- `yarn` commands route common package-manager commands and script names to
+  `aube`; Yarn-specific management commands fall back to the real Yarn binary.
 
 ## Install
 
@@ -35,25 +37,25 @@ Add the shim directory after mise activation so it stays ahead of mise's own
 For zsh:
 
 ```sh
-eval "$(aubeshim init zsh)"
+eval "$(aubeshim activate zsh)"
 ```
 
 For bash:
 
 ```sh
-eval "$(aubeshim init bash)"
+eval "$(aubeshim activate bash)"
 ```
 
 For fish:
 
 ```fish
-aubeshim init fish | source
+aubeshim activate fish | source
 ```
 
 For POSIX profile files:
 
 ```sh
-eval "$(aubeshim init sh)"
+eval "$(aubeshim activate sh)"
 ```
 
 ## Configuration
@@ -63,6 +65,7 @@ Environment variables can override tool discovery:
 - `AUBESHIM_AUBE`: path to the aube binary.
 - `AUBESHIM_REAL_NPM`: path to the real npm binary.
 - `AUBESHIM_REAL_PNPM`: path to the real pnpm binary.
+- `AUBESHIM_REAL_YARN`: path to the real Yarn binary.
 - `AUBESHIM_SHIM_DIR`: path to the installed shim directory.
 
 By default, real package-manager discovery asks `mise which` first, then falls
