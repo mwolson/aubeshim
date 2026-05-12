@@ -124,7 +124,7 @@ pub fn shell_init(shell: Shell, shim_dir: &Path) -> String {
     let dir = shell_quote(&shim_dir.to_string_lossy());
     match shell {
         Shell::Bash | Shell::Zsh => format!(
-            "case \":$PATH:\" in\n    *:{dir}:*) ;;\n    *) export PATH={dir}:\"$PATH\" ;;\nesac\n"
+            "_aubeshim_shim_dir={dir}\nPATH=\":$PATH:\"\nPATH=\"${{PATH//:$_aubeshim_shim_dir:/:}}\"\nPATH=\"${{PATH#:}}\"\nPATH=\"${{PATH%:}}\"\nexport PATH=\"$_aubeshim_shim_dir:$PATH\"\nunset _aubeshim_shim_dir\n"
         ),
         Shell::Fish => format!("fish_add_path --prepend {dir}\n"),
     }
@@ -700,6 +700,17 @@ mod tests {
             init,
             "fish_add_path --prepend '/home/me/.local/share/aubeshim/shims'\n"
         );
+    }
+
+    #[test]
+    fn shell_init_supports_bash() {
+        let init = shell_init(
+            Shell::Bash,
+            Path::new("/home/me/.local/share/aubeshim/shims"),
+        );
+
+        assert!(init.contains("PATH=\"${PATH//:$_aubeshim_shim_dir:/:}\""));
+        assert!(init.contains("export PATH=\"$_aubeshim_shim_dir:$PATH\""));
     }
 
     #[cfg(unix)]
