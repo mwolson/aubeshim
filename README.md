@@ -50,6 +50,12 @@ For fish:
 aubeshim init fish | source
 ```
 
+For POSIX profile files:
+
+```sh
+eval "$(aubeshim init sh)"
+```
+
 ## Configuration
 
 Environment variables can override tool discovery:

@@ -50,6 +50,7 @@ pub enum Command {
 pub enum Shell {
     Bash,
     Fish,
+    Sh,
     Zsh,
 }
 
@@ -127,6 +128,9 @@ pub fn shell_init(shell: Shell, shim_dir: &Path) -> String {
             "_aubeshim_shim_dir={dir}\nPATH=\":$PATH:\"\nPATH=\"${{PATH//:$_aubeshim_shim_dir:/:}}\"\nPATH=\"${{PATH#:}}\"\nPATH=\"${{PATH%:}}\"\nexport PATH=\"$_aubeshim_shim_dir:$PATH\"\nunset _aubeshim_shim_dir\n"
         ),
         Shell::Fish => format!("fish_add_path --prepend {dir}\n"),
+        Shell::Sh => format!(
+            "AUBESHIM_SHIM_DIR=${{AUBESHIM_SHIM_DIR:-{dir}}}\ncase \":$PATH:\" in\n    *:\"$AUBESHIM_SHIM_DIR\":*) ;;\n    *) PATH=\"$AUBESHIM_SHIM_DIR:$PATH\" ;;\nesac\nexport PATH\n"
+        ),
     }
 }
 
@@ -700,6 +704,14 @@ mod tests {
             init,
             "fish_add_path --prepend '/home/me/.local/share/aubeshim/shims'\n"
         );
+    }
+
+    #[test]
+    fn shell_init_supports_sh() {
+        let init = shell_init(Shell::Sh, Path::new("/home/me/.local/share/aubeshim/shims"));
+
+        assert!(init.contains("AUBESHIM_SHIM_DIR="));
+        assert!(init.contains("export PATH"));
     }
 
     #[test]
