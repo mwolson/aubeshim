@@ -132,7 +132,9 @@ pub fn shell_init(shell: Shell, shim_dir: &Path) -> String {
         Shell::Bash | Shell::Zsh => format!(
             "_aubeshim_shim_dir={dir}\nPATH=\":$PATH:\"\nPATH=\"${{PATH//:$_aubeshim_shim_dir:/:}}\"\nPATH=\"${{PATH#:}}\"\nPATH=\"${{PATH%:}}\"\nexport PATH=\"$_aubeshim_shim_dir:$PATH\"\nunset _aubeshim_shim_dir\n"
         ),
-        Shell::Fish => format!("fish_add_path --prepend {dir}\n"),
+        Shell::Fish => format!(
+            "set -l _aubeshim_shim_dir {dir}\nset -gx PATH (string match --invert -- $_aubeshim_shim_dir $PATH)\nfish_add_path --path --prepend $_aubeshim_shim_dir\nset -e _aubeshim_shim_dir\n"
+        ),
         Shell::Sh => format!(
             "AUBESHIM_SHIM_DIR=${{AUBESHIM_SHIM_DIR:-{dir}}}\n_aubeshim_old_path=$PATH\nPATH=$AUBESHIM_SHIM_DIR\nIFS=:\nfor _aubeshim_path_entry in $_aubeshim_old_path; do\n    if [ \"$_aubeshim_path_entry\" != \"$AUBESHIM_SHIM_DIR\" ]; then\n        PATH=\"$PATH:$_aubeshim_path_entry\"\n    fi\ndone\nunset IFS _aubeshim_old_path _aubeshim_path_entry\nexport PATH\n"
         ),
@@ -823,10 +825,18 @@ mod tests {
             Path::new("/home/me/.local/share/aubeshim/shims"),
         );
 
-        assert_eq!(
-            init,
-            "fish_add_path --prepend '/home/me/.local/share/aubeshim/shims'\n"
-        );
+        assert!(init.contains("string match --invert"));
+        assert!(init.contains("fish_add_path --path --prepend $_aubeshim_shim_dir"));
+    }
+
+    #[test]
+    fn fish_activation_removes_existing_shim_entries_before_prepending() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim_dir = dir.path().to_string_lossy();
+        let path = format!("/bin:{shim_dir}:/usr/bin:{shim_dir}:/sbin");
+        let output = run_shell_activation("fish", Shell::Fish, dir.path(), &path);
+
+        assert_eq!(output, format!("{shim_dir}:/bin:/usr/bin:/sbin"));
     }
 
     #[test]
@@ -912,6 +922,9 @@ mod tests {
         );
         let zdotdir = tempfile::tempdir().unwrap();
         let mut cmd = std::process::Command::new(shell);
+        if shell == "fish" {
+            cmd.arg("--no-config");
+        }
         cmd.arg("-c").arg(script).env("PATH", path);
         if shell == "zsh" {
             cmd.env("ZDOTDIR", zdotdir.path());
