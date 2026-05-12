@@ -220,6 +220,12 @@ fn plan_npm(args: &[OsString]) -> Plan {
 
 fn plan_yarn(args: &[OsString]) -> Plan {
     let Some(command_idx) = command_index(args) else {
+        if !args.is_empty() {
+            return Plan {
+                target: Target::Aube,
+                args: args.to_vec(),
+            };
+        }
         return Plan {
             target: Target::Aube,
             args: vec![OsString::from("install")],
@@ -784,6 +790,14 @@ mod tests {
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn yarn_version_flag_passes_through() {
+        let plan = plan_for(ShimTool::Yarn, &os(&["--version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["--version"]);
     }
 
     #[test]
