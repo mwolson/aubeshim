@@ -23,5 +23,5 @@ chmod +x "$BIN_DIR/aubeshim"
 echo "  Installed $BIN_DIR/aubeshim"
 
 echo ""
-echo "Installing npm, pnpm, and yarn shims..."
+echo "Installing bun, npm, pnpm, and yarn shims..."
 exec "$BIN_DIR/aubeshim" install --force

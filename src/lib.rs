@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
 
-const SHIM_NAMES: &[&str] = &["npm", "pnpm", "yarn"];
+const SHIM_NAMES: &[&str] = &["bun", "npm", "pnpm", "yarn"];
 
 #[derive(Debug, Parser)]
 #[command(
@@ -29,7 +29,7 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         shim_dir: Option<PathBuf>,
     },
-    /// Create npm, pnpm, and yarn shims that point at this executable
+    /// Create package-manager shims that point at this executable
     Install {
         /// Replace existing shim files
         #[arg(long)]
@@ -62,6 +62,7 @@ pub enum Invocation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShimTool {
+    Bun,
     Npm,
     Pnpm,
     Yarn,
@@ -76,6 +77,7 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Aube,
+    RealBun,
     RealNpm,
     RealPnpm,
     RealYarn,
@@ -91,6 +93,7 @@ pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
         .unwrap_or("aubeshim")
         .to_ascii_lowercase();
     match stem.as_str() {
+        "bun" => Invocation::Shim(ShimTool::Bun),
         "npm" => Invocation::Shim(ShimTool::Npm),
         "pnpm" => Invocation::Shim(ShimTool::Pnpm),
         "yarn" => Invocation::Shim(ShimTool::Yarn),
@@ -106,6 +109,7 @@ pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
 
 pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
     match tool {
+        ShimTool::Bun => plan_bun(args),
         ShimTool::Npm => plan_npm(args),
         ShimTool::Pnpm => Plan {
             target: Target::Aube,
@@ -219,6 +223,34 @@ fn plan_npm(args: &[OsString]) -> Plan {
     }
 }
 
+fn plan_bun(args: &[OsString]) -> Plan {
+    let Some(command_idx) = command_index(args) else {
+        return Plan {
+            target: Target::RealBun,
+            args: args.to_vec(),
+        };
+    };
+    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+    let prefix = &args[..command_idx];
+    let rest = &args[command_idx + 1..];
+
+    let Some(command) = normalize_bun_command(&command) else {
+        return Plan {
+            target: Target::RealBun,
+            args: args.to_vec(),
+        };
+    };
+
+    let mut out = Vec::with_capacity(args.len());
+    out.extend_from_slice(prefix);
+    out.push(OsString::from(command));
+    out.extend_from_slice(rest);
+    Plan {
+        target: Target::Aube,
+        args: out,
+    }
+}
+
 fn plan_yarn(args: &[OsString]) -> Plan {
     let Some(command_idx) = command_index(args) else {
         if !args.is_empty() {
@@ -271,6 +303,7 @@ fn run_plan(plan: Plan) -> Result<ExitStatus> {
 fn resolve_target(target: Target) -> Result<OsString> {
     match target {
         Target::Aube => resolve_aube().context("could not find aube"),
+        Target::RealBun => resolve_real_bun().context("could not find real bun"),
         Target::RealNpm => resolve_real_npm().context("could not find real npm"),
         Target::RealPnpm => resolve_real_pnpm().context("could not find real pnpm"),
         Target::RealYarn => resolve_real_yarn().context("could not find real yarn"),
@@ -281,6 +314,12 @@ fn resolve_aube() -> Option<OsString> {
     env::var_os("AUBESHIM_AUBE")
         .or_else(|| mise_which("aube"))
         .or_else(|| path_which("aube"))
+}
+
+fn resolve_real_bun() -> Option<OsString> {
+    env::var_os("AUBESHIM_REAL_BUN")
+        .or_else(|| mise_which("bun"))
+        .or_else(|| path_which_excluding_shims("bun"))
 }
 
 fn resolve_real_npm() -> Option<OsString> {
@@ -438,6 +477,22 @@ fn normalize_yarn_command(command: &str) -> String {
         "info" => "view".to_owned(),
         "upgrade" | "up" => "update".to_owned(),
         other => known_yarn_name(other).unwrap_or(other).to_owned(),
+    }
+}
+
+fn normalize_bun_command(command: &str) -> Option<&'static str> {
+    match command {
+        "add" => Some("add"),
+        "i" | "install" => Some("install"),
+        "link" => Some("link"),
+        "outdated" => Some("outdated"),
+        "publish" => Some("publish"),
+        "remove" | "rm" => Some("remove"),
+        "run" => Some("run"),
+        "unlink" => Some("unlink"),
+        "update" | "upgrade" => Some("update"),
+        "x" => Some("dlx"),
+        _ => None,
     }
 }
 
@@ -786,6 +841,30 @@ mod tests {
     }
 
     #[test]
+    fn bun_install_uses_aube_install() {
+        let plan = plan_for(ShimTool::Bun, &os(&["install", "--frozen-lockfile"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
+    }
+
+    #[test]
+    fn bun_run_uses_aube_run() {
+        let plan = plan_for(ShimTool::Bun, &os(&["run", "dev"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["run", "dev"]);
+    }
+
+    #[test]
+    fn bun_runtime_command_uses_real_bun() {
+        let plan = plan_for(ShimTool::Bun, &os(&["test", "src/app.test.ts"]));
+
+        assert_eq!(plan.target, Target::RealBun);
+        assert_eq!(strings(&plan.args), vec!["test", "src/app.test.ts"]);
+    }
+
+    #[test]
     fn yarn_without_args_installs() {
         let plan = plan_for(ShimTool::Yarn, &os(&[]));
 
@@ -902,13 +981,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installed = install_shims(dir.path(), false).unwrap();
 
-        assert_eq!(installed.len(), 3);
+        assert_eq!(installed.len(), 4);
+        assert!(dir.path().join("bun").is_symlink());
         assert!(dir.path().join("npm").is_symlink());
         assert!(dir.path().join("pnpm").is_symlink());
         assert!(dir.path().join("yarn").is_symlink());
 
         let removed = uninstall_shims(dir.path()).unwrap();
-        assert_eq!(removed.len(), 3);
+        assert_eq!(removed.len(), 4);
+        assert!(!dir.path().join("bun").exists());
         assert!(!dir.path().join("npm").exists());
         assert!(!dir.path().join("pnpm").exists());
         assert!(!dir.path().join("yarn").exists());

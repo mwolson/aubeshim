@@ -1,7 +1,7 @@
 # aubeshim
 
-`aubeshim` installs PATH shims that let existing `npm` and `pnpm` commands use
-`aube` when the command shape is compatible.
+`aubeshim` installs PATH shims that let existing `bun`, `npm`, `pnpm`, and
+`yarn` commands use `aube` when the command shape is compatible.
 
 The goal is to get aube's fast installs, strict layout, and run-time
 auto-install checks without editing each project's scripts.
@@ -19,6 +19,9 @@ auto-install checks without editing each project's scripts.
   pnpm-compatible command surface.
 - `yarn` commands route common package-manager commands and script names to
   `aube`; Yarn-specific management commands fall back to the real Yarn binary.
+- `bun` routes package-manager commands such as `bun install`, `bun add`, and
+  `bun run` to `aube`; runtime commands and unknown commands fall back to the
+  real Bun binary.
 
 ## Install
 
@@ -32,7 +35,7 @@ That copies `aubeshim` to `~/.local/bin` and replaces package-manager shims in
 `~/.local/share/aubeshim/shims`.
 
 Add the shim directory after mise activation so it stays ahead of mise's own
-`npm` and `pnpm` shims.
+package-manager shims.
 
 For zsh:
 
@@ -63,6 +66,7 @@ eval "$(aubeshim activate sh)"
 Environment variables can override tool discovery:
 
 - `AUBESHIM_AUBE`: path to the aube binary.
+- `AUBESHIM_REAL_BUN`: path to the real Bun binary.
 - `AUBESHIM_REAL_NPM`: path to the real npm binary.
 - `AUBESHIM_REAL_PNPM`: path to the real pnpm binary.
 - `AUBESHIM_REAL_YARN`: path to the real Yarn binary.
