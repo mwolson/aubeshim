@@ -1,0 +1,49 @@
+.common-excludes: &common_excludes
+  - "**/target/**"
+  - "**/node_modules/**"
+
+.common-setup: &common_setup
+  - run: |
+      if ! command -v cargo >/dev/null 2>&1; then
+        echo "cargo is required for pre-commit hooks." >&2
+        exit 1
+      fi
+      if ! command -v bun >/dev/null 2>&1; then
+        echo "bun is required for pre-commit hooks." >&2
+        exit 1
+      fi
+
+pre-commit:
+  parallel: true
+  output: true
+  setup: *common_setup
+  commands:
+    md-format:
+      priority: 1
+      glob: "*.md"
+      exclude: *common_excludes
+      run: bun run format:file {staged_files}
+      stage_fixed: true
+    cargo-fmt:
+      priority: 1
+      glob:
+        - "src/**/*.rs"
+        - "tests/**/*.rs"
+      exclude: *common_excludes
+      run: cargo fmt --all -- --check
+    cargo-clippy:
+      priority: 2
+      glob:
+        - "src/**/*.rs"
+        - "tests/**/*.rs"
+        - "Cargo.toml"
+        - "Cargo.lock"
+      exclude: *common_excludes
+      run: cargo clippy --all-targets -- -D warnings
+    cargo-test:
+      priority: 3
+      glob:
+        - "src/**/*.rs"
+        - "tests/**/*.rs"
+      exclude: *common_excludes
+      run: cargo test

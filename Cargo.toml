@@ -1,0 +1,29 @@
+[package]
+name = "aubeshim"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["Michael Olson <c@mwolson.org>"]
+description = "PATH shims that route npm and pnpm commands through aube when safe"
+repository = "https://github.com/mwolson/aubeshim"
+readme = "README.md"
+keywords = ["aube", "npm", "pnpm", "shim"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "aubeshim"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = true
