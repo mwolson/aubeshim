@@ -22,7 +22,6 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Print shell code that prepends the aubeshim shim directory to PATH
-    #[command(alias = "init")]
     Activate {
         /// Shell syntax to emit
         shell: Shell,
