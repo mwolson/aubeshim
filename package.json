@@ -2,7 +2,7 @@
   "license": "MIT",
   "name": "aubeshim",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "scripts": {
     "build": "cargo build --release",
     "clippy": "cargo clippy --all-targets -- -D warnings",
