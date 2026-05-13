@@ -292,6 +292,13 @@ fn plan_bun(args: &[OsString]) -> Plan {
         return plan_mise_global_outdated(rest);
     }
 
+    if command == "run" && bun_run_uses_real_bun(prefix, rest) {
+        return Plan {
+            target: Target::RealBun,
+            args: args.to_vec(),
+        };
+    }
+
     if has_global_marker(args) {
         if let Some(action) = bun_global_package_action(command) {
             return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
@@ -801,6 +808,121 @@ fn normalize_bun_command(command: &str) -> Option<&'static str> {
         "x" => Some("dlx"),
         _ => None,
     }
+}
+
+fn bun_run_uses_real_bun(prefix: &[OsString], rest: &[OsString]) -> bool {
+    if prefix.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        is_bun_runtime_flag(&arg)
+    }) {
+        return true;
+    }
+
+    let mut i = 0;
+    while i < rest.len() {
+        let arg = rest[i].to_string_lossy();
+        if arg == "--" {
+            return false;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            return looks_like_bun_file_entrypoint(&arg);
+        }
+        if is_bun_runtime_flag(&arg) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_bun_runtime_flag(arg: &str) -> bool {
+    if !arg.starts_with('-') || arg == "-" {
+        return false;
+    }
+    let name = long_flag_name(arg);
+    matches!(
+        name,
+        "bun"
+            | "conditions"
+            | "config"
+            | "console-depth"
+            | "cpu-prof"
+            | "cpu-prof-dir"
+            | "cpu-prof-interval"
+            | "cpu-prof-md"
+            | "cpu-prof-name"
+            | "cwd"
+            | "define"
+            | "dns-result-order"
+            | "drop"
+            | "elide-lines"
+            | "env-file"
+            | "eval"
+            | "expose-gc"
+            | "extension-order"
+            | "feature"
+            | "fetch-preconnect"
+            | "heap-prof"
+            | "heap-prof-dir"
+            | "heap-prof-md"
+            | "heap-prof-name"
+            | "hot"
+            | "if-present"
+            | "import"
+            | "inspect"
+            | "inspect-brk"
+            | "inspect-wait"
+            | "jsx-factory"
+            | "jsx-fragment"
+            | "jsx-import-source"
+            | "jsx-runtime"
+            | "jsx-side-effects"
+            | "loader"
+            | "main-fields"
+            | "max-http-header-size"
+            | "no-addons"
+            | "no-clear-screen"
+            | "no-deprecation"
+            | "no-env-file"
+            | "no-exit-on-error"
+            | "no-install"
+            | "no-macros"
+            | "parallel"
+            | "port"
+            | "preload"
+            | "prefer-latest"
+            | "prefer-offline"
+            | "preserve-symlinks"
+            | "preserve-symlinks-main"
+            | "print"
+            | "redis-preconnect"
+            | "require"
+            | "shell"
+            | "smol"
+            | "sql-preconnect"
+            | "throw-deprecation"
+            | "title"
+            | "tsconfig-override"
+            | "unhandled-rejections"
+            | "use-bundled-ca"
+            | "use-openssl-ca"
+            | "use-system-ca"
+            | "user-agent"
+            | "watch"
+            | "workspaces"
+            | "zero-fill-buffers"
+    ) || matches!(arg, "-b" | "-e" | "-i" | "-p" | "-r")
+}
+
+fn looks_like_bun_file_entrypoint(arg: &str) -> bool {
+    arg == "-"
+        || arg.starts_with("./")
+        || arg.starts_with("../")
+        || arg.starts_with('/')
+        || matches!(
+            Path::new(arg).extension().and_then(OsStr::to_str),
+            Some("cjs" | "cts" | "js" | "jsx" | "mjs" | "mts" | "tsx" | "ts")
+        )
 }
 
 fn known_yarn_name(command: &str) -> Option<&'static str> {
@@ -1314,6 +1436,50 @@ mod tests {
     }
 
     #[test]
+    fn bun_run_with_runtime_flags_uses_real_bun() {
+        for args in [
+            &["--watch", "run", "dev"][..],
+            &["run", "--watch", "dev"][..],
+            &["run", "--bun", "dev"][..],
+            &["run", "-b", "dev"][..],
+            &["run", "--preload", "./setup.ts", "dev"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_file_entrypoints_use_real_bun() {
+        for args in [
+            &["run", "./src/app.ts"][..],
+            &["run", "../scripts/dev.tsx"][..],
+            &["run", "/tmp/app.mjs"][..],
+            &["run", "server.jsx"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_script_args_still_use_aube() {
+        for args in [
+            &["run", "dev", "--watch"][..],
+            &["run", "dev", "--", "--watch"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
     fn bun_global_package_operations_use_mise() {
         for (args, expected) in [
             (
@@ -1346,10 +1512,17 @@ mod tests {
 
     #[test]
     fn bun_runtime_command_uses_real_bun() {
-        let plan = plan_for(ShimTool::Bun, &os(&["test", "src/app.test.ts"]));
+        for args in [
+            &["-e", "console.log(1)"][..],
+            &["build", "./src/app.ts"][..],
+            &["pm", "cache"][..],
+            &["test", "src/app.test.ts"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
 
-        assert_eq!(plan.target, Target::RealBun);
-        assert_eq!(strings(&plan.args), vec!["test", "src/app.test.ts"]);
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
     }
 
     #[test]
