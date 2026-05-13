@@ -14,29 +14,37 @@ dependency trees instead of keeping a full copy in every `node_modules`.
 
 ## Behavior
 
-- `npm install` and `npm ci` run through `aube`.
-- `npm install <package>` is translated to `aube add <package>`.
-- `npm uninstall <package>` is translated to `aube remove <package>`.
+- Local npm installs and scripts run through `aube`. That includes
+  `npm install`, `npm ci`, `npm run build`, `npm test`, and `npm start`.
+- npm package edits are normalized to aube's command names:
+  `npm install <package>` becomes `aube add <package>`, and
+  `npm uninstall <package>` becomes `aube remove <package>`.
+- `pnpm` commands pass through to `aube`, since aube already presents a
+  pnpm-compatible command surface.
+- `yarn` routes common package-manager commands and script names to `aube`;
+  Yarn-specific management commands fall back to the real Yarn binary.
+- `bun` routes package-manager commands such as `bun install`, `bun add`, and
+  `bun run` to `aube`; runtime commands and unknown commands fall back to the
+  real Bun binary.
+
+Global npm tools are managed through mise:
+
 - Global `outdated` operations using `-g` or `--global` run `mise outdated`
-  with `--bump -C "$HOME"` so globally managed npm tools are checked through
-  mise.
+  with `--bump -C "$HOME"`.
 - Global package add/install operations using `-g` or `--global` run
   `mise use -g npm:<package>`.
 - Global package remove operations using `-g` or `--global` run
   `mise unuse -g npm:<package>`.
-- `npm view`, `npm show`, and `npm info` with `--json` fall back to the real
-  npm so tools such as mise can consume npm's registry metadata format.
-- npm script commands such as `npm run build`, `npm test`, and `npm start` run
-  through `aube`.
+
+Commands that need npm's exact registry or account behavior fall back to the
+real npm:
+
+- `npm view`, `npm show`, and `npm info` with `--json` fall back so tools such
+  as mise can consume npm's registry metadata format.
+- `npm publish` and `npm unpublish` fall back to preserve npm's registry, auth,
+  access, provenance, OTP, tag, workspace, and lifecycle semantics.
 - npm-only commands such as `npm pkg`, `npm search`, and `npm whoami` fall back
   to the real npm.
-- `pnpm` commands pass through to `aube`, since aube already presents a
-  pnpm-compatible command surface.
-- `yarn` commands route common package-manager commands and script names to
-  `aube`; Yarn-specific management commands fall back to the real Yarn binary.
-- `bun` routes package-manager commands such as `bun install`, `bun add`, and
-  `bun run` to `aube`; runtime commands and unknown commands fall back to the
-  real Bun binary.
 
 ## Install
 

@@ -949,7 +949,7 @@ fn known_npm_command(command: &str) -> bool {
 fn npm_only_command(command: &str) -> bool {
     matches!(
         command,
-        "owner" | "pkg" | "search" | "set-script" | "token" | "whoami"
+        "owner" | "pkg" | "publish" | "search" | "set-script" | "token" | "unpublish" | "whoami"
     )
 }
 
@@ -1235,6 +1235,19 @@ mod tests {
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["pkg", "get", "name"]);
+    }
+
+    #[test]
+    fn npm_publish_uses_real_npm() {
+        for args in [
+            &["publish", "--access", "public"][..],
+            &["unpublish", "aubeshim@0.0.0"][..],
+        ] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
     }
 
     #[test]
