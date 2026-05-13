@@ -79,11 +79,28 @@ pub(crate) fn should_shim(config: &Config, cwd: &Path) -> Result<bool> {
 
 fn matches_repo_glob(patterns: &[String], repo: &Path) -> Result<bool> {
     for pattern in patterns {
-        if compile_repo_glob(pattern)?.matches_path_with(repo, repo_glob_match_options()) {
+        if matches_repo_glob_pattern(pattern, repo)? {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn matches_repo_glob_pattern(pattern: &str, repo: &Path) -> Result<bool> {
+    let pattern = expand_home(pattern);
+    if matches_expanded_repo_glob(&pattern, repo)? {
+        return Ok(true);
+    }
+    if let Some(base) = pattern.strip_suffix("/**") {
+        return matches_expanded_repo_glob(base, repo);
+    }
+    Ok(false)
+}
+
+fn matches_expanded_repo_glob(pattern: &str, repo: &Path) -> Result<bool> {
+    Ok(Pattern::new(pattern)
+        .with_context(|| format!("invalid repo glob `{pattern}`"))?
+        .matches_path_with(repo, repo_glob_match_options()))
 }
 
 fn compile_repo_glob(pattern: &str) -> Result<Pattern> {
@@ -119,5 +136,29 @@ fn repo_dir(cwd: &Path) -> PathBuf {
             return cwd.to_path_buf();
         };
         dir = parent;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_leading_tilde_in_repo_globs() {
+        let home = home_dir();
+
+        assert_eq!(expand_home("~"), home.to_string_lossy());
+        assert_eq!(
+            expand_home("~/devel/alairo/**"),
+            home.join("devel/alairo/**").to_string_lossy()
+        );
+        assert_eq!(expand_home("/tmp/~"), "/tmp/~");
+    }
+
+    #[test]
+    fn trailing_double_star_matches_base_repo_dir() {
+        let repo = home_dir().join("devel/alairo");
+
+        assert!(matches_repo_glob_pattern("~/devel/alairo/**", &repo).unwrap());
     }
 }

@@ -1,24 +1,84 @@
-use crate::config::load_config;
+use crate::config::{load_config, should_shim};
 use crate::planner::{plan_for_config, Plan, Target};
 use crate::shims::{default_shim_dir, is_executable_file, ShimTool};
 use anyhow::{anyhow, bail, Context, Result};
 use std::cmp::Ordering;
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
 
 const MIN_MISE_VERSION: &str = "2026.5.6";
 
 pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
+    if is_version_request(args) {
+        let status = if should_runtime_shim()? {
+            run_version(tool, args)?
+        } else {
+            run_plan(real_plan_for(tool, args))?
+        };
+        std::process::exit(exit_code(status));
+    }
+
     let plan = runtime_plan_for(tool, args)?;
     let status = run_plan(plan)?;
     std::process::exit(exit_code(status));
+}
+
+fn is_version_request(args: &[OsString]) -> bool {
+    args.len() == 1 && matches!(args[0].to_str(), Some("--version" | "-v"))
+}
+
+fn run_version(tool: ShimTool, args: &[OsString]) -> Result<ExitStatus> {
+    let real_tool = resolve_real_tool(tool)?;
+    let output = ProcessCommand::new(&real_tool)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to run {}", PathBuf::from(&real_tool).display()))?;
+
+    io::stdout().write_all(&output.stdout)?;
+    io::stderr().write_all(&output.stderr)?;
+
+    if output.status.success() {
+        if !output.stdout.is_empty() && !output.stdout.ends_with(b"\n") {
+            println!();
+        }
+        let aube_version = aube_version()?;
+        println!(
+            "(shimmed by aubeshim v{} to aube v{aube_version})",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
+    Ok(output.status)
 }
 fn runtime_plan_for(tool: ShimTool, args: &[OsString]) -> Result<Plan> {
     let config = load_config()?;
     let cwd = env::current_dir().context("could not determine current directory")?;
     plan_for_config(tool, args, &config, &cwd)
+}
+
+fn should_runtime_shim() -> Result<bool> {
+    let config = load_config()?;
+    let cwd = env::current_dir().context("could not determine current directory")?;
+    should_shim(&config, &cwd)
+}
+
+fn real_plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
+    Plan {
+        target: real_target_for(tool),
+        args: args.to_vec(),
+    }
+}
+
+fn real_target_for(tool: ShimTool) -> Target {
+    match tool {
+        ShimTool::Bun => Target::RealBun,
+        ShimTool::Npm => Target::RealNpm,
+        ShimTool::Pnpm => Target::RealPnpm,
+        ShimTool::Yarn => Target::RealYarn,
+    }
 }
 
 fn run_plan(plan: Plan) -> Result<ExitStatus> {
@@ -51,6 +111,41 @@ fn resolve_target(target: Target) -> Result<OsString> {
         Target::RealYarn => resolve_real_yarn()?
             .ok_or_else(|| missing_tool_error("real yarn", "AUBESHIM_REAL_YARN")),
     }
+}
+
+fn resolve_real_tool(tool: ShimTool) -> Result<OsString> {
+    match tool {
+        ShimTool::Bun => {
+            resolve_real_bun()?.ok_or_else(|| missing_tool_error("real bun", "AUBESHIM_REAL_BUN"))
+        }
+        ShimTool::Npm => {
+            resolve_real_npm()?.ok_or_else(|| missing_tool_error("real npm", "AUBESHIM_REAL_NPM"))
+        }
+        ShimTool::Pnpm => resolve_real_pnpm()?
+            .ok_or_else(|| missing_tool_error("real pnpm", "AUBESHIM_REAL_PNPM")),
+        ShimTool::Yarn => resolve_real_yarn()?
+            .ok_or_else(|| missing_tool_error("real yarn", "AUBESHIM_REAL_YARN")),
+    }
+}
+
+fn aube_version() -> Result<String> {
+    let aube = resolve_aube()?.ok_or_else(|| missing_tool_error("aube", "AUBESHIM_AUBE"))?;
+    let output = ProcessCommand::new(&aube)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("failed to run {}", PathBuf::from(&aube).display()))?;
+
+    if !output.status.success() {
+        bail!(
+            "failed to check aube version with {}",
+            PathBuf::from(aube).display()
+        );
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("aube --version output was not UTF-8")?;
+    version_from_output(&stdout)
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("could not parse aube version from `{}`", stdout.trim()))
 }
 
 fn resolve_mise() -> Result<Option<OsString>> {
@@ -143,6 +238,10 @@ fn ensure_supported_mise(mise: &OsStr) -> Result<()> {
 }
 
 pub(crate) fn mise_version_from_output(output: &str) -> Option<&str> {
+    version_from_output(output)
+}
+
+pub(crate) fn version_from_output(output: &str) -> Option<&str> {
     output
         .split_whitespace()
         .find(|token| token.chars().any(|ch| ch.is_ascii_digit()))

@@ -29,7 +29,7 @@ mod tests {
     use crate::config::parse_config;
     use crate::runtime::{
         compare_dotted_versions, mise_version_from_output, missing_tool_error,
-        unsupported_mise_error,
+        unsupported_mise_error, version_from_output,
     };
     use std::{cmp::Ordering, ffi::OsString, fs, path::Path};
 
@@ -81,6 +81,42 @@ mod tests {
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_shimmed_version_flags_are_aube_targets() {
+        let repo = repo_fixture();
+        let plan = plan_for_config(
+            ShimTool::Npm,
+            &os(&["--version"]),
+            &Config::default(),
+            &repo.cwd,
+        )
+        .unwrap();
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["--version"]);
+    }
+
+    #[test]
+    fn bun_version_flag_is_normally_real_bun() {
+        let plan = plan_for(ShimTool::Bun, &os(&["--version"]));
+
+        assert_eq!(plan.target, Target::RealBun);
+        assert_eq!(strings(&plan.args), vec!["--version"]);
+    }
+
+    #[test]
+    fn config_ignored_version_flags_pass_through_to_real_tool() {
+        let repo = repo_fixture();
+        let config = Config {
+            default: false,
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Npm, &os(&["--version"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["--version"]);
     }
 
     #[test]
@@ -625,6 +661,12 @@ shim = ["~/devel/work/*"]
             mise_version_from_output("mise 2026.5.6 linux-x64"),
             Some("2026.5.6")
         );
+    }
+
+    #[test]
+    fn parses_tool_version_output() {
+        assert_eq!(version_from_output("aube 0.3.3\n"), Some("0.3.3"));
+        assert_eq!(version_from_output("1.2.3\n"), Some("1.2.3"));
     }
 
     #[test]

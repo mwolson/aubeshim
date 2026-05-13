@@ -27,6 +27,9 @@ organization behind aube and mise.
 - `bun` routes package-manager commands such as `bun install`, `bun add`, and
   `bun run` to `aube`; runtime commands and unknown commands fall back to the
   real Bun binary.
+- `--version` and `-v` print the real package manager version. In repos where
+  aubeshim is configured to shim, they also print the aubeshim and aube versions
+  in a parenthesized hint.
 
 Global npm tools are managed through mise:
 
@@ -182,13 +185,14 @@ command starts.
 
 `*` matches within a single path component. `**` is recursive and can match zero
 or more path components, so use it for repos that may live under nested
-directories, such as `~/devel/projects/**`.
+directories, such as `~/devel/projects/**`. A trailing `/**` also matches the
+base repo directory itself.
 
 For a config managed by `~/dotfiles`, symlink it into the default location:
 
 ```sh
 mkdir -p ~/.config/aubeshim
-ln -s ~/dotfiles/aubeshim/config.toml ~/.config/aubeshim/config.toml
+ln -s ~/dotfiles/config/aubeshim/config.toml ~/.config/aubeshim/config.toml
 ```
 
 Environment variables can override tool discovery:
