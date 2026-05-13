@@ -1,0 +1,93 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+time:
+  lefthook-darwin-arm64@2.1.6: 2026-04-16T07:34:15.890Z
+  lefthook-linux-arm64@2.1.6: 2026-04-16T07:34:26.135Z
+  lefthook-linux-x64@2.1.6: 2026-04-16T07:34:31.246Z
+  lefthook-windows-arm64@2.1.6: 2026-04-16T07:34:36.141Z
+  lefthook-windows-x64@2.1.6: 2026-04-16T07:34:41.089Z
+  lefthook@2.1.6: 2026-04-16T07:35:04.384Z
+  prettier@3.8.3: 2026-04-15T00:55:25.573Z
+
+importers:
+
+  .:
+    devDependencies:
+      lefthook:
+        specifier: ^2.1.4
+        version: 2.1.6
+      prettier:
+        specifier: ^3.8.1
+        version: 3.8.3
+
+packages:
+
+  lefthook-darwin-arm64@2.1.6:
+    resolution: {integrity: sha512-hyB7eeiX78BS66f70byTJacDLC/xV1vgMv9n+idFUsrM7J3Udd/ag9Ag5NP3t0eN0EqQqAtrNnt35EH01lxnRQ==}
+    os:
+    - darwin
+    cpu:
+    - arm64
+
+  lefthook-linux-arm64@2.1.6:
+    resolution: {integrity: sha512-WDJiQhJdZOvKORZd+kF/ms2l6NSsXzdA9ahflyr65V90AC4jES223W8VtEMbGPUtHuGWMEZ/v/XvwlWv0Ioz9g==}
+    os:
+    - linux
+    cpu:
+    - arm64
+
+  lefthook-linux-x64@2.1.6:
+    resolution: {integrity: sha512-C18nCd7nTX1AVL4TcvwMmLAO1VI1OuGluIOTjiPkBQ746Ls1HhL5rl//jMPACmT28YmxIQJ2ZcLPNmhvEVBZvw==}
+    os:
+    - linux
+    cpu:
+    - x64
+
+  lefthook-windows-arm64@2.1.6:
+    resolution: {integrity: sha512-lD8yFWY4Csuljd0Rqs7EQaySC0VvDf7V3rN1FhRMUISTRDHutebIom1Loc8ckQPvKYGC6mftT9k0GvipsS+Brw==}
+    os:
+    - win32
+    cpu:
+    - arm64
+
+  lefthook-windows-x64@2.1.6:
+    resolution: {integrity: sha512-q4z2n3xucLscoWiyMwFViEj3N8MDSkPulMwcJYuCYFHoPhP1h+icqNu7QRLGYj6AnVrCQweiUJY3Tb2X+GbD/A==}
+    os:
+    - win32
+    cpu:
+    - x64
+
+  lefthook@2.1.6:
+    resolution: {integrity: sha512-w9sBoR0mdN+kJc3SB85VzpiAAl451/rxdCRcZlwW71QLjkeH3EBQFgc4VMj5apePychYDHAlqEWTB8J8JK/j1Q==}
+    hasBin: true
+
+  prettier@3.8.3:
+    resolution: {integrity: sha512-7igPTM53cGHMW8xWuVTydi2KO233VFiTNyF5hLJqpilHfmn8C8gPf+PS7dUT64YcXFbiMGZxS9pCSxL/Dxm/Jw==}
+    engines: {node: '>=14'}
+    hasBin: true
+
+snapshots:
+
+  lefthook-darwin-arm64@2.1.6: {}
+
+  lefthook-linux-arm64@2.1.6: {}
+
+  lefthook-linux-x64@2.1.6: {}
+
+  lefthook-windows-arm64@2.1.6: {}
+
+  lefthook-windows-x64@2.1.6: {}
+
+  lefthook@2.1.6:
+    optionalDependencies:
+      lefthook-darwin-arm64: 2.1.6
+      lefthook-linux-arm64: 2.1.6
+      lefthook-linux-x64: 2.1.6
+      lefthook-windows-arm64: 2.1.6
+      lefthook-windows-x64: 2.1.6
+
+  prettier@3.8.3: {}

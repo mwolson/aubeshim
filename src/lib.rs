@@ -86,6 +86,12 @@ pub enum Target {
     RealYarn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GlobalPackageAction {
+    Use,
+    Unuse,
+}
+
 pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
     let Some(argv0) = argv0 else {
         return Invocation::Manager;
@@ -211,11 +217,13 @@ fn plan_npm(args: &[OsString]) -> Plan {
         return plan_mise_global_outdated(rest);
     }
 
-    if npm_global_package_operation(&command) && has_global_marker(args) {
-        return Plan {
-            target: Target::RealNpm,
-            args: args.to_vec(),
-        };
+    if has_global_marker(args) {
+        if let Some(action) = npm_global_package_action(&command) {
+            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
+                target: Target::RealNpm,
+                args: args.to_vec(),
+            });
+        }
     }
 
     if matches!(command.as_str(), "install" | "i" | "in") && install_has_packages(rest) {
@@ -245,11 +253,14 @@ fn plan_pnpm(args: &[OsString]) -> Plan {
         if command == "outdated" && has_global_marker(args) {
             return plan_mise_global_outdated(&args[command_idx + 1..]);
         }
-        if pnpm_global_package_operation(&command) && has_global_marker(args) {
-            return Plan {
-                target: Target::RealPnpm,
-                args: args.to_vec(),
-            };
+        if has_global_marker(args) {
+            if let Some(action) = pnpm_global_package_action(&command) {
+                return plan_mise_global_package_action(action, &args[command_idx + 1..])
+                    .unwrap_or_else(|| Plan {
+                        target: Target::RealPnpm,
+                        args: args.to_vec(),
+                    });
+            }
         }
     }
 
@@ -281,11 +292,13 @@ fn plan_bun(args: &[OsString]) -> Plan {
         return plan_mise_global_outdated(rest);
     }
 
-    if bun_global_package_operation(command) && has_global_marker(args) {
-        return Plan {
-            target: Target::RealBun,
-            args: args.to_vec(),
-        };
+    if has_global_marker(args) {
+        if let Some(action) = bun_global_package_action(command) {
+            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
+                target: Target::RealBun,
+                args: args.to_vec(),
+            });
+        }
     }
 
     let mut out = Vec::with_capacity(args.len());
@@ -326,11 +339,13 @@ fn plan_yarn(args: &[OsString]) -> Plan {
         return plan_mise_global_outdated(rest);
     }
 
-    if yarn_global_package_operation(&command) && has_global_marker(args) {
-        return Plan {
-            target: Target::RealYarn,
-            args: args.to_vec(),
-        };
+    if has_global_marker(args) {
+        if let Some(action) = yarn_global_package_action(&command) {
+            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
+                target: Target::RealYarn,
+                args: args.to_vec(),
+            });
+        }
     }
 
     let mut out = Vec::with_capacity(args.len());
@@ -355,6 +370,26 @@ fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
         target: Target::Mise,
         args: out,
     }
+}
+
+fn plan_mise_global_package_action(action: GlobalPackageAction, args: &[OsString]) -> Option<Plan> {
+    let packages = translate_global_package_args(args);
+    if packages.is_empty() {
+        return None;
+    }
+
+    let mut out = vec![
+        OsString::from(match action {
+            GlobalPackageAction::Use => "use",
+            GlobalPackageAction::Unuse => "unuse",
+        }),
+        OsString::from("-g"),
+    ];
+    out.extend(packages);
+    Some(Plan {
+        target: Target::Mise,
+        args: out,
+    })
 }
 
 fn run_plan(plan: Plan) -> Result<ExitStatus> {
@@ -527,7 +562,7 @@ fn missing_tool_error(tool: &str, env_var: &str) -> anyhow::Error {
 
 fn missing_mise_error() -> anyhow::Error {
     anyhow!(
-        "could not find mise; install mise >= {MIN_MISE_VERSION} to use aubeshim global outdated support"
+        "could not find mise; install mise >= {MIN_MISE_VERSION} to use aubeshim global npm tool support"
     )
 }
 
@@ -618,7 +653,7 @@ fn install_has_packages(args: &[OsString]) -> bool {
 fn has_global_marker(args: &[OsString]) -> bool {
     args.iter().any(|arg| {
         let arg = arg.to_string_lossy();
-        arg == "-g" || arg == "--global" || arg.starts_with("--global=")
+        is_global_marker(&arg)
     })
 }
 
@@ -656,6 +691,48 @@ fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
         .collect()
 }
 
+fn translate_global_package_args(args: &[OsString]) -> Vec<OsString> {
+    let mut packages = Vec::new();
+    let mut i = 0;
+    let mut literal = false;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if !literal && arg == "--" {
+            literal = true;
+            i += 1;
+            continue;
+        }
+        if !literal && is_global_marker(&arg) {
+            i += 1;
+            continue;
+        }
+        if !literal && arg.starts_with("--") {
+            let name = long_flag_name(&arg);
+            if global_package_flag_takes_value(name) && !arg.contains('=') {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if !literal && arg.starts_with('-') && arg.len() > 1 {
+            if short_global_package_flag_takes_value(&arg) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        packages.push(OsString::from(format!("npm:{arg}")));
+        i += 1;
+    }
+    packages
+}
+
+fn is_global_marker(arg: &str) -> bool {
+    arg == "-g" || arg == "--global" || arg.starts_with("--global=")
+}
+
 fn normalize_npm_command(command: &str) -> &'static str {
     match command {
         "i" | "in" => "install",
@@ -666,33 +743,40 @@ fn normalize_npm_command(command: &str) -> &'static str {
     }
 }
 
-fn npm_global_package_operation(command: &str) -> bool {
-    matches!(
-        command,
-        "add" | "i" | "in" | "install" | "remove" | "rm" | "un" | "uni" | "uninstall"
-    )
+fn npm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
+    match command {
+        "add" | "i" | "in" | "install" => Some(GlobalPackageAction::Use),
+        "remove" | "rm" | "un" | "uni" | "uninstall" => Some(GlobalPackageAction::Unuse),
+        _ => None,
+    }
 }
 
 fn npm_json_metadata_command(command: &str) -> bool {
     matches!(command, "info" | "show" | "view")
 }
 
-fn pnpm_global_package_operation(command: &str) -> bool {
-    matches!(
-        command,
-        "add" | "i" | "install" | "remove" | "rm" | "uninstall"
-    )
+fn pnpm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
+    match command {
+        "add" | "i" | "install" => Some(GlobalPackageAction::Use),
+        "remove" | "rm" | "uninstall" => Some(GlobalPackageAction::Unuse),
+        _ => None,
+    }
 }
 
-fn bun_global_package_operation(command: &str) -> bool {
-    matches!(command, "add" | "install" | "remove")
+fn bun_global_package_action(command: &str) -> Option<GlobalPackageAction> {
+    match command {
+        "add" | "install" => Some(GlobalPackageAction::Use),
+        "remove" => Some(GlobalPackageAction::Unuse),
+        _ => None,
+    }
 }
 
-fn yarn_global_package_operation(command: &str) -> bool {
-    matches!(
-        command,
-        "add" | "install" | "remove" | "rm" | "upgrade" | "up"
-    )
+fn yarn_global_package_action(command: &str) -> Option<GlobalPackageAction> {
+    match command {
+        "add" | "install" | "upgrade" | "up" => Some(GlobalPackageAction::Use),
+        "remove" | "rm" => Some(GlobalPackageAction::Unuse),
+        _ => None,
+    }
 }
 
 fn normalize_yarn_command(command: &str) -> String {
@@ -876,6 +960,10 @@ fn global_flag_takes_value(name: &str) -> bool {
     )
 }
 
+fn global_package_flag_takes_value(name: &str) -> bool {
+    global_flag_takes_value(name) || install_flag_takes_value(name)
+}
+
 fn install_flag_takes_value(name: &str) -> bool {
     matches!(
         name,
@@ -898,6 +986,10 @@ fn install_flag_takes_value(name: &str) -> bool {
 
 fn short_global_flag_takes_value(arg: &str) -> bool {
     matches!(arg, "-C")
+}
+
+fn short_global_package_flag_takes_value(arg: &str) -> bool {
+    short_global_flag_takes_value(arg) || short_install_flag_takes_value(arg)
 }
 
 fn short_install_flag_takes_value(arg: &str) -> bool {
@@ -996,6 +1088,20 @@ mod tests {
         args
     }
 
+    fn mise_global_use_args(packages: &[&str]) -> Vec<String> {
+        mise_global_package_args("use", packages)
+    }
+
+    fn mise_global_unuse_args(packages: &[&str]) -> Vec<String> {
+        mise_global_package_args("unuse", packages)
+    }
+
+    fn mise_global_package_args(command: &str, packages: &[&str]) -> Vec<String> {
+        let mut args = vec![command.to_owned(), "-g".to_owned()];
+        args.extend(packages.iter().map(|arg| format!("npm:{arg}")));
+        args
+    }
+
     #[test]
     fn npm_install_without_packages_uses_aube_install() {
         let plan = plan_for(ShimTool::Npm, &os(&["install"]));
@@ -1027,19 +1133,48 @@ mod tests {
     }
 
     #[test]
-    fn npm_global_install_with_package_uses_real_npm() {
+    fn npm_global_install_with_package_uses_mise() {
         let plan = plan_for(ShimTool::Npm, &os(&["-g", "install", "cowsay"]));
 
-        assert_eq!(plan.target, Target::RealNpm);
-        assert_eq!(strings(&plan.args), vec!["-g", "install", "cowsay"]);
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), mise_global_use_args(&["cowsay"]));
     }
 
     #[test]
-    fn npm_global_remove_uses_real_npm() {
+    fn npm_global_remove_uses_mise() {
         let remove = plan_for(ShimTool::Npm, &os(&["remove", "--global", "cowsay"]));
 
-        assert_eq!(remove.target, Target::RealNpm);
-        assert_eq!(strings(&remove.args), vec!["remove", "--global", "cowsay"]);
+        assert_eq!(remove.target, Target::Mise);
+        assert_eq!(strings(&remove.args), mise_global_unuse_args(&["cowsay"]));
+    }
+
+    #[test]
+    fn npm_global_install_without_package_uses_real_npm() {
+        let plan = plan_for(ShimTool::Npm, &os(&["install", "-g"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["install", "-g"]);
+    }
+
+    #[test]
+    fn npm_global_install_skips_package_manager_flags_for_mise() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&[
+                "install",
+                "-g",
+                "--registry",
+                "https://registry.npmjs.org",
+                "--json",
+                "@biomejs/biome@latest",
+            ]),
+        );
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            mise_global_use_args(&["@biomejs/biome@latest"])
+        );
     }
 
     #[test]
@@ -1119,16 +1254,25 @@ mod tests {
     }
 
     #[test]
-    fn pnpm_global_package_operations_use_real_pnpm() {
-        for args in [
-            &["add", "-g", "cowsay"][..],
-            &["install", "--global", "typescript"][..],
-            &["remove", "-g", "cowsay"][..],
+    fn pnpm_global_package_operations_use_mise() {
+        for (args, expected) in [
+            (
+                &["add", "-g", "cowsay"][..],
+                mise_global_use_args(&["cowsay"]),
+            ),
+            (
+                &["install", "--global", "typescript"][..],
+                mise_global_use_args(&["typescript"]),
+            ),
+            (
+                &["remove", "-g", "cowsay"][..],
+                mise_global_unuse_args(&["cowsay"]),
+            ),
         ] {
             let plan = plan_for(ShimTool::Pnpm, &os(args));
 
-            assert_eq!(plan.target, Target::RealPnpm);
-            assert_eq!(strings(&plan.args), args);
+            assert_eq!(plan.target, Target::Mise);
+            assert_eq!(strings(&plan.args), expected);
         }
     }
 
@@ -1157,16 +1301,25 @@ mod tests {
     }
 
     #[test]
-    fn bun_global_package_operations_use_real_bun() {
-        for args in [
-            &["add", "-g", "cowsay"][..],
-            &["install", "--global", "typescript"][..],
-            &["remove", "-g", "cowsay"][..],
+    fn bun_global_package_operations_use_mise() {
+        for (args, expected) in [
+            (
+                &["add", "-g", "cowsay"][..],
+                mise_global_use_args(&["cowsay"]),
+            ),
+            (
+                &["install", "--global", "typescript"][..],
+                mise_global_use_args(&["typescript"]),
+            ),
+            (
+                &["remove", "-g", "cowsay"][..],
+                mise_global_unuse_args(&["cowsay"]),
+            ),
         ] {
             let plan = plan_for(ShimTool::Bun, &os(args));
 
-            assert_eq!(plan.target, Target::RealBun);
-            assert_eq!(strings(&plan.args), args);
+            assert_eq!(plan.target, Target::Mise);
+            assert_eq!(strings(&plan.args), expected);
         }
     }
 
@@ -1211,16 +1364,29 @@ mod tests {
     }
 
     #[test]
-    fn yarn_global_package_operations_use_real_yarn() {
-        for args in [
-            &["add", "-g", "cowsay"][..],
-            &["install", "--global", "typescript"][..],
-            &["remove", "-g", "cowsay"][..],
+    fn yarn_global_package_operations_use_mise() {
+        for (args, expected) in [
+            (
+                &["add", "-g", "cowsay"][..],
+                mise_global_use_args(&["cowsay"]),
+            ),
+            (
+                &["install", "--global", "typescript"][..],
+                mise_global_use_args(&["typescript"]),
+            ),
+            (
+                &["remove", "-g", "cowsay"][..],
+                mise_global_unuse_args(&["cowsay"]),
+            ),
+            (
+                &["up", "-g", "eslint"][..],
+                mise_global_use_args(&["eslint"]),
+            ),
         ] {
             let plan = plan_for(ShimTool::Yarn, &os(args));
 
-            assert_eq!(plan.target, Target::RealYarn);
-            assert_eq!(strings(&plan.args), args);
+            assert_eq!(plan.target, Target::Mise);
+            assert_eq!(strings(&plan.args), expected);
         }
     }
 

@@ -6,15 +6,23 @@
 The goal is to get aube's fast installs, strict layout, and run-time
 auto-install checks without editing each project's scripts.
 
+For developers with many JavaScript checkouts, that can mean hundreds of
+gigabytes of duplicate dependencies saved. aube keeps package files in a global
+content-addressable store and links compatible projects to shared materialized
+dependency trees instead of keeping a full copy in every `node_modules`.
+
 ## Behavior
 
 - `npm install` and `npm ci` run through `aube`.
 - `npm install <package>` is translated to `aube add <package>`.
 - `npm uninstall <package>` is translated to `aube remove <package>`.
-- Global package operations using `-g` or `--global` fall back to the real
-  package manager for `add`, `install`, and `remove` variants.
-- Global `outdated` operations using `-g` or `--global` run `mise outdated
---bump -C "$HOME"` so globally managed npm tools are checked through mise.
+- Global `outdated` operations using `-g` or `--global` run `mise outdated`
+  with `--bump -C "$HOME"` so globally managed npm tools are checked through
+  mise.
+- Global package add/install operations using `-g` or `--global` run
+  `mise use -g npm:<package>`.
+- Global package remove operations using `-g` or `--global` run
+  `mise unuse -g npm:<package>`.
 - `npm view`, `npm show`, and `npm info` with `--json` fall back to the real
   npm so tools such as mise can consume npm's registry metadata format.
 - npm script commands such as `npm run build`, `npm test`, and `npm start` run
@@ -103,13 +111,15 @@ mise use -g npm:prettier@latest
 mise use -g npm:@anthropic-ai/claude-code@latest
 ```
 
-With mise's default `npm.package_manager = "auto"` setting, mise uses `aube`
-for npm package installs when `aube` is available. aubeshim keeps that workflow
-working by sending npm registry metadata commands such as `npm view ... --json`
-to the real npm binary, then leaving mise to install and expose the resulting
-global tool on PATH.
+aubeshim keeps that workflow working by sending npm registry metadata commands
+such as `npm view ... --json` to the real npm binary, then leaving mise to
+install and expose the resulting global tool on PATH.
 
-Plain package-manager global install and removal operations also fall back to
-the real package manager because aube does not support those global command
-shapes yet. Examples include `npm install -g`, `pnpm add -g`, `bun add -g`, and
-`yarn add -g`.
+Use `npm outdated -g`, `pnpm outdated -g`, `bun outdated -g`, or
+`yarn outdated -g` to check those tools through mise. aubeshim translates those
+commands to `mise outdated --bump -C "$HOME"` and passes package arguments as
+`npm:<package>`.
+
+Direct global add/install/remove commands for named packages also use mise.
+Examples include `npm install -g prettier`, `pnpm add -g eslint`,
+`bun add -g typescript`, and `yarn remove -g cowsay`.
