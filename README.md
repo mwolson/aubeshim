@@ -1,7 +1,8 @@
 # aubeshim
 
 `aubeshim` installs PATH shims that let existing `bun`, `npm`, `pnpm`, and
-`yarn` commands use `aube` when the command shape is compatible.
+`yarn` commands use [aube](https://aube.en.dev) when the command shape is
+compatible.
 
 The goal is to get aube's fast installs, strict layout, and run-time
 auto-install checks without editing each project's scripts.
