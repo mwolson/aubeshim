@@ -8,8 +8,8 @@
         echo "cargo is required for pre-commit hooks." >&2
         exit 1
       fi
-      if ! command -v bun >/dev/null 2>&1; then
-        echo "bun is required for pre-commit hooks." >&2
+      if ! command -v aube >/dev/null 2>&1; then
+        echo "aube is required for pre-commit hooks." >&2
         exit 1
       fi
 
@@ -22,7 +22,7 @@ pre-commit:
       priority: 1
       glob: "*.md"
       exclude: *common_excludes
-      run: bun run format:file {staged_files}
+      run: aube run format:file {staged_files}
       stage_fixed: true
     cargo-fmt:
       priority: 1

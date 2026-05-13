@@ -7,10 +7,11 @@ compatible.
 The goal is to get aube's fast installs, strict layout, and run-time
 auto-install checks without editing each project's scripts.
 
-For developers with many JavaScript checkouts, that can mean hundreds of
-gigabytes of duplicate dependencies saved. aube keeps package files in a global
-content-addressable store and links compatible projects to shared materialized
-dependency trees instead of keeping a full copy in every `node_modules`.
+For developers with many JavaScript checkouts using several different package
+managers, that can mean hundreds of gigabytes of duplicate dependencies saved.
+
+Note: `aubeshim` is a third-party project and is not associated with en.dev, the
+organization behind aube and mise.
 
 ## Behavior
 
@@ -29,8 +30,8 @@ dependency trees instead of keeping a full copy in every `node_modules`.
 
 Global npm tools are managed through mise:
 
-- Global `outdated` operations using `-g` or `--global` run `mise outdated`
-  with `--bump -C "$HOME"`.
+- Global `outdated` operations using `-g` or `--global` run `mise outdated` with
+  `--bump -C "$HOME"`.
 - Global package add/install operations using `-g` or `--global` run
   `mise use -g npm:<package>`.
 - Global package remove operations using `-g` or `--global` run
@@ -55,8 +56,8 @@ cargo install aubeshim
 aubeshim install --force
 ```
 
-That installs the `aubeshim` binary with Cargo and creates `bun`, `npm`,
-`pnpm`, and `yarn` shims in `~/.local/share/aubeshim/shims`.
+That installs the `aubeshim` binary with Cargo and creates `bun`, `npm`, `pnpm`,
+and `yarn` shims in `~/.local/share/aubeshim/shims`.
 
 From a source checkout, use the development installer instead:
 
@@ -67,24 +68,28 @@ From a source checkout, use the development installer instead:
 That builds the checkout, copies `aubeshim` to `~/.local/bin`, and replaces
 shims in `~/.local/share/aubeshim/shims`.
 
-Add the shim directory after mise activation so it stays ahead of mise's own
-package-manager shims.
+Activate aubeshim after `mise activate` or any other tool manager that rewrites
+`PATH`. mise installs its own package-manager shims, so aubeshim must activate
+last for `bun`, `npm`, `pnpm`, and `yarn` to resolve to aubeshim.
 
 For zsh:
 
 ```sh
+eval "$(mise activate zsh --shims)"
 eval "$(aubeshim activate zsh)"
 ```
 
 For bash:
 
 ```sh
+eval "$(mise activate bash --shims)"
 eval "$(aubeshim activate bash)"
 ```
 
 For fish:
 
 ```fish
+mise activate fish --shims | source
 aubeshim activate fish | source
 ```
 
@@ -93,6 +98,41 @@ For POSIX profile files:
 ```sh
 eval "$(aubeshim activate sh)"
 ```
+
+`aubeshim activate` removes existing aubeshim shim-dir entries before prepending
+the shim directory, so it is safe to run more than once.
+
+For zsh, put the activation in `.zshrc` for interactive terminals. If
+non-interactive zsh processes also need the shims, for example editors or agents
+that invoke zsh, add a guarded activation to `.zshenv` too:
+
+```sh
+if (( $+commands[aubeshim] )); then
+  eval "$(aubeshim activate zsh)"
+fi
+```
+
+If `.zshrc` later runs `mise activate`, keep the `.zshrc` aubeshim activation
+after it so aubeshim remains first in `PATH`.
+
+On Linux desktops, adding the POSIX activation to `.profile` can help GUI
+applications launched by the session inherit the shims too, even if your
+interactive shell is zsh. Many desktop sessions use `.profile` through `sh`
+semantics rather than zsh startup files, depending on how your display manager
+starts the user session:
+
+```sh
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate sh --shims)"
+fi
+if command -v aubeshim >/dev/null 2>&1; then
+  eval "$(aubeshim activate sh)"
+fi
+```
+
+Keep the shell-specific activation in `.zshrc`, `.bashrc`, or equivalent for
+interactive terminals, since `.profile` is not sourced by every shell startup
+path.
 
 ## Configuration
 
