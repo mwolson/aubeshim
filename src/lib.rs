@@ -1,1193 +1,37 @@
-use anyhow::{anyhow, bail, Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
-use std::cmp::Ordering;
+mod cli;
+mod config;
+mod planner;
+mod runtime;
+mod shell;
+mod shims;
+
+pub use cli::{Cli, Command};
+pub use config::{default_config_path, load_config, Config};
+pub use planner::{plan_for, plan_for_config, Plan, Target};
+pub use runtime::exec_shim;
+pub use shell::{shell_init, Shell};
+pub use shims::{
+    default_shim_dir, install_shims, invocation_from_argv0, uninstall_shims, Invocation, ShimTool,
+};
+
 use std::env;
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, ExitStatus};
+use std::path::PathBuf;
 
-const SHIM_NAMES: &[&str] = &["bun", "npm", "pnpm", "yarn"];
-const MIN_MISE_VERSION: &str = "2026.5.6";
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "aubeshim",
-    version,
-    about = "Install and run aube-backed package-manager shims"
-)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Print shell code that prepends the aubeshim shim directory to PATH
-    Activate {
-        /// Shell syntax to emit
-        shell: Shell,
-        /// Shim directory to put on PATH
-        #[arg(long, value_name = "DIR")]
-        shim_dir: Option<PathBuf>,
-    },
-    /// Create package-manager shims that point at this executable
-    Install {
-        /// Replace existing shim files
-        #[arg(long)]
-        force: bool,
-        /// Directory where package-manager shims should be installed
-        #[arg(long, value_name = "DIR")]
-        shim_dir: Option<PathBuf>,
-    },
-    /// Remove bun, npm, pnpm, and yarn shims
-    Uninstall {
-        /// Directory where package-manager shims were installed
-        #[arg(long, value_name = "DIR")]
-        shim_dir: Option<PathBuf>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Shell {
-    Bash,
-    Fish,
-    Sh,
-    Zsh,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Invocation {
-    Manager,
-    Shim(ShimTool),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShimTool {
-    Bun,
-    Npm,
-    Pnpm,
-    Yarn,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Plan {
-    pub target: Target,
-    pub args: Vec<OsString>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    Aube,
-    Mise,
-    RealBun,
-    RealNpm,
-    RealPnpm,
-    RealYarn,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GlobalPackageAction {
-    Use,
-    Unuse,
-}
-
-pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
-    let Some(argv0) = argv0 else {
-        return Invocation::Manager;
-    };
-    let stem = Path::new(argv0)
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("aubeshim")
-        .to_ascii_lowercase();
-    match stem.as_str() {
-        "bun" => Invocation::Shim(ShimTool::Bun),
-        "npm" => Invocation::Shim(ShimTool::Npm),
-        "pnpm" => Invocation::Shim(ShimTool::Pnpm),
-        "yarn" => Invocation::Shim(ShimTool::Yarn),
-        _ => Invocation::Manager,
-    }
-}
-
-pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
-    let plan = plan_for(tool, args);
-    let status = run_plan(plan)?;
-    std::process::exit(exit_code(status));
-}
-
-pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
-    match tool {
-        ShimTool::Bun => plan_bun(args),
-        ShimTool::Npm => plan_npm(args),
-        ShimTool::Pnpm => plan_pnpm(args),
-        ShimTool::Yarn => plan_yarn(args),
-    }
-}
-
-pub fn default_shim_dir() -> PathBuf {
-    if let Some(dir) = env::var_os("AUBESHIM_SHIM_DIR") {
-        return PathBuf::from(dir);
-    }
-    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(data_home).join("aubeshim").join("shims");
-    }
-    home_dir().join(".local/share/aubeshim/shims")
-}
-
-pub fn shell_init(shell: Shell, shim_dir: &Path) -> String {
-    let dir = shell_quote(&shim_dir.to_string_lossy());
-    match shell {
-        Shell::Bash | Shell::Zsh => format!(
-            "_aubeshim_shim_dir={dir}\nPATH=\":$PATH:\"\nPATH=\"${{PATH//:$_aubeshim_shim_dir:/:}}\"\nPATH=\"${{PATH#:}}\"\nPATH=\"${{PATH%:}}\"\nexport PATH=\"$_aubeshim_shim_dir:$PATH\"\nunset _aubeshim_shim_dir\n"
-        ),
-        Shell::Fish => format!(
-            "set -l _aubeshim_shim_dir {dir}\nset -gx PATH (string match --invert -- $_aubeshim_shim_dir $PATH)\nfish_add_path --path --prepend $_aubeshim_shim_dir\nset -e _aubeshim_shim_dir\n"
-        ),
-        Shell::Sh => format!(
-            "AUBESHIM_SHIM_DIR=${{AUBESHIM_SHIM_DIR:-{dir}}}\n_aubeshim_old_path=$PATH\nPATH=$AUBESHIM_SHIM_DIR\nIFS=:\nfor _aubeshim_path_entry in $_aubeshim_old_path; do\n    if [ \"$_aubeshim_path_entry\" != \"$AUBESHIM_SHIM_DIR\" ]; then\n        PATH=\"$PATH:$_aubeshim_path_entry\"\n    fi\ndone\nunset IFS _aubeshim_old_path _aubeshim_path_entry\nexport PATH\n"
-        ),
-    }
-}
-
-pub fn install_shims(shim_dir: &Path, force: bool) -> Result<Vec<PathBuf>> {
-    let exe = env::current_exe().context("could not locate current executable")?;
-    fs::create_dir_all(shim_dir)
-        .with_context(|| format!("could not create {}", shim_dir.display()))?;
-
-    let mut installed = Vec::new();
-    for name in SHIM_NAMES {
-        let path = shim_dir.join(name);
-        if path.exists() || path.is_symlink() {
-            if !force {
-                bail!(
-                    "{} already exists; rerun with force to replace it",
-                    path.display()
-                );
-            }
-            fs::remove_file(&path)
-                .with_context(|| format!("could not remove {}", path.display()))?;
-        }
-        link_executable(&exe, &path)
-            .with_context(|| format!("could not install {}", path.display()))?;
-        installed.push(path);
-    }
-    Ok(installed)
-}
-
-pub fn uninstall_shims(shim_dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut removed = Vec::new();
-    for name in SHIM_NAMES {
-        let path = shim_dir.join(name);
-        if path.exists() || path.is_symlink() {
-            fs::remove_file(&path)
-                .with_context(|| format!("could not remove {}", path.display()))?;
-            removed.push(path);
-        }
-    }
-    Ok(removed)
-}
-
-fn plan_npm(args: &[OsString]) -> Plan {
-    let Some(command_idx) = command_index(args) else {
-        return Plan {
-            target: Target::Aube,
-            args: args.to_vec(),
-        };
-    };
-    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
-    let prefix = &args[..command_idx];
-    let rest = &args[command_idx + 1..];
-
-    if npm_only_command(&command) || !known_npm_command(&command) {
-        return Plan {
-            target: Target::RealNpm,
-            args: args.to_vec(),
-        };
-    }
-
-    if npm_json_metadata_command(&command) && has_json_marker(args) {
-        return Plan {
-            target: Target::RealNpm,
-            args: args.to_vec(),
-        };
-    }
-
-    if command == "outdated" && has_global_marker(args) {
-        return plan_mise_global_outdated(rest);
-    }
-
-    if has_global_marker(args) {
-        if let Some(action) = npm_global_package_action(&command) {
-            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
-                target: Target::RealNpm,
-                args: args.to_vec(),
-            });
-        }
-    }
-
-    if matches!(command.as_str(), "install" | "i" | "in") && install_has_packages(rest) {
-        let mut out = Vec::with_capacity(args.len());
-        out.extend_from_slice(prefix);
-        out.push(OsString::from("add"));
-        out.extend(translate_npm_install_package_args(rest));
-        return Plan {
-            target: Target::Aube,
-            args: out,
-        };
-    }
-
-    let mut out = Vec::with_capacity(args.len());
-    out.extend_from_slice(prefix);
-    out.push(OsString::from(normalize_npm_command(&command)));
-    out.extend_from_slice(rest);
-    Plan {
-        target: Target::Aube,
-        args: out,
-    }
-}
-
-fn plan_pnpm(args: &[OsString]) -> Plan {
-    if let Some(command_idx) = command_index(args) {
-        let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
-        if command == "outdated" && has_global_marker(args) {
-            return plan_mise_global_outdated(&args[command_idx + 1..]);
-        }
-        if has_global_marker(args) {
-            if let Some(action) = pnpm_global_package_action(&command) {
-                return plan_mise_global_package_action(action, &args[command_idx + 1..])
-                    .unwrap_or_else(|| Plan {
-                        target: Target::RealPnpm,
-                        args: args.to_vec(),
-                    });
-            }
-        }
-    }
-
-    Plan {
-        target: Target::Aube,
-        args: args.to_vec(),
-    }
-}
-
-fn plan_bun(args: &[OsString]) -> Plan {
-    let Some(command_idx) = command_index(args) else {
-        return Plan {
-            target: Target::RealBun,
-            args: args.to_vec(),
-        };
-    };
-    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
-    let prefix = &args[..command_idx];
-    let rest = &args[command_idx + 1..];
-
-    let Some(command) = normalize_bun_command(&command) else {
-        return Plan {
-            target: Target::RealBun,
-            args: args.to_vec(),
-        };
-    };
-
-    if command == "outdated" && has_global_marker(args) {
-        return plan_mise_global_outdated(rest);
-    }
-
-    if command == "run" && bun_run_uses_real_bun(prefix, rest) {
-        return Plan {
-            target: Target::RealBun,
-            args: args.to_vec(),
-        };
-    }
-
-    if has_global_marker(args) {
-        if let Some(action) = bun_global_package_action(command) {
-            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
-                target: Target::RealBun,
-                args: args.to_vec(),
-            });
-        }
-    }
-
-    let mut out = Vec::with_capacity(args.len());
-    out.extend_from_slice(prefix);
-    out.push(OsString::from(command));
-    out.extend_from_slice(rest);
-    Plan {
-        target: Target::Aube,
-        args: out,
-    }
-}
-
-fn plan_yarn(args: &[OsString]) -> Plan {
-    let Some(command_idx) = command_index(args) else {
-        if !args.is_empty() {
-            return Plan {
-                target: Target::Aube,
-                args: args.to_vec(),
-            };
-        }
-        return Plan {
-            target: Target::Aube,
-            args: vec![OsString::from("install")],
-        };
-    };
-    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
-    let prefix = &args[..command_idx];
-    let rest = &args[command_idx + 1..];
-
-    if yarn_only_command(&command) {
-        return Plan {
-            target: Target::RealYarn,
-            args: args.to_vec(),
-        };
-    }
-
-    if command == "outdated" && has_global_marker(args) {
-        return plan_mise_global_outdated(rest);
-    }
-
-    if has_global_marker(args) {
-        if let Some(action) = yarn_global_package_action(&command) {
-            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
-                target: Target::RealYarn,
-                args: args.to_vec(),
-            });
-        }
-    }
-
-    let mut out = Vec::with_capacity(args.len());
-    out.extend_from_slice(prefix);
-    out.push(OsString::from(normalize_yarn_command(&command)));
-    out.extend_from_slice(rest);
-    Plan {
-        target: Target::Aube,
-        args: out,
-    }
-}
-
-fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
-    let mut out = vec![
-        OsString::from("outdated"),
-        OsString::from("--bump"),
-        OsString::from("-C"),
-        home_dir().into_os_string(),
-    ];
-    out.extend(translate_global_outdated_args(args));
-    Plan {
-        target: Target::Mise,
-        args: out,
-    }
-}
-
-fn plan_mise_global_package_action(action: GlobalPackageAction, args: &[OsString]) -> Option<Plan> {
-    let packages = translate_global_package_args(args);
-    if packages.is_empty() {
-        return None;
-    }
-
-    let mut out = vec![
-        OsString::from(match action {
-            GlobalPackageAction::Use => "use",
-            GlobalPackageAction::Unuse => "unuse",
-        }),
-        OsString::from("-g"),
-    ];
-    out.extend(packages);
-    Some(Plan {
-        target: Target::Mise,
-        args: out,
-    })
-}
-
-fn run_plan(plan: Plan) -> Result<ExitStatus> {
-    let program = resolve_target(plan.target)?;
-    let mut cmd = ProcessCommand::new(&program);
-    cmd.args(&plan.args);
-
-    if matches!(plan.target, Target::Aube) && env::var_os("AUBE_NPM_PATH").is_none() {
-        if let Some(npm) = resolve_real_npm()? {
-            cmd.env("AUBE_NPM_PATH", npm);
-        }
-    }
-
-    cmd.status()
-        .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
-}
-
-fn resolve_target(target: Target) -> Result<OsString> {
-    match target {
-        Target::Aube => resolve_aube()?.ok_or_else(|| missing_tool_error("aube", "AUBESHIM_AUBE")),
-        Target::Mise => resolve_mise()?.ok_or_else(missing_mise_error),
-        Target::RealBun => {
-            resolve_real_bun()?.ok_or_else(|| missing_tool_error("real bun", "AUBESHIM_REAL_BUN"))
-        }
-        Target::RealNpm => {
-            resolve_real_npm()?.ok_or_else(|| missing_tool_error("real npm", "AUBESHIM_REAL_NPM"))
-        }
-        Target::RealPnpm => resolve_real_pnpm()?
-            .ok_or_else(|| missing_tool_error("real pnpm", "AUBESHIM_REAL_PNPM")),
-        Target::RealYarn => resolve_real_yarn()?
-            .ok_or_else(|| missing_tool_error("real yarn", "AUBESHIM_REAL_YARN")),
-    }
-}
-
-fn resolve_mise() -> Result<Option<OsString>> {
-    let Some(mise) = path_which("mise") else {
-        return Ok(None);
-    };
-    ensure_supported_mise(&mise)?;
-    Ok(Some(mise))
-}
-
-fn resolve_aube() -> Result<Option<OsString>> {
-    resolve_tool("aube", "AUBESHIM_AUBE", path_which)
-}
-
-fn resolve_real_bun() -> Result<Option<OsString>> {
-    resolve_tool("bun", "AUBESHIM_REAL_BUN", path_which_excluding_shims)
-}
-
-fn resolve_real_npm() -> Result<Option<OsString>> {
-    resolve_tool("npm", "AUBESHIM_REAL_NPM", path_which_excluding_shims)
-}
-
-fn resolve_real_pnpm() -> Result<Option<OsString>> {
-    resolve_tool("pnpm", "AUBESHIM_REAL_PNPM", path_which_excluding_shims)
-}
-
-fn resolve_real_yarn() -> Result<Option<OsString>> {
-    resolve_tool("yarn", "AUBESHIM_REAL_YARN", path_which_excluding_shims)
-}
-
-fn resolve_tool(
-    tool: &str,
-    env_var: &str,
-    path_lookup: fn(&str) -> Option<OsString>,
-) -> Result<Option<OsString>> {
-    if let Some(path) = env::var_os(env_var) {
-        return Ok(Some(path));
-    }
-
-    if let Some(path) = mise_which(tool)? {
-        return Ok(Some(path));
-    }
-
-    Ok(path_lookup(tool))
-}
-
-fn mise_which(tool: &str) -> Result<Option<OsString>> {
-    let Some(mise) = path_which("mise") else {
-        return Ok(None);
-    };
-    ensure_supported_mise(&mise)?;
-
-    let output = ProcessCommand::new(&mise)
-        .arg("which")
-        .arg(tool)
-        .output()
-        .with_context(|| format!("failed to run {}", PathBuf::from(&mise).display()))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let path = String::from_utf8(output.stdout).context("mise which output was not UTF-8")?;
-    let path = path.trim();
-    if path.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(OsString::from(path)))
-    }
-}
-
-fn ensure_supported_mise(mise: &OsStr) -> Result<()> {
-    let output = ProcessCommand::new(mise)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("failed to run {}", PathBuf::from(mise).display()))?;
-    if !output.status.success() {
-        bail!(
-            "failed to check mise version with {}",
-            PathBuf::from(mise).display()
-        );
-    }
-
-    let stdout = String::from_utf8(output.stdout).context("mise --version output was not UTF-8")?;
-    let version = mise_version_from_output(&stdout)
-        .ok_or_else(|| anyhow!("could not parse mise version from `{}`", stdout.trim()))?;
-    if compare_dotted_versions(version, MIN_MISE_VERSION) == Ordering::Less {
-        return Err(unsupported_mise_error(version));
-    }
-
-    Ok(())
-}
-
-fn mise_version_from_output(output: &str) -> Option<&str> {
-    output
-        .split_whitespace()
-        .find(|token| token.chars().any(|ch| ch.is_ascii_digit()))
-}
-
-fn unsupported_mise_error(version: &str) -> anyhow::Error {
-    anyhow!(
-        "mise {version} is too old for aubeshim; install mise >= {MIN_MISE_VERSION}. Arch Linux's mise package may lag behind the version needed for aube support."
-    )
-}
-
-fn compare_dotted_versions(left: &str, right: &str) -> Ordering {
-    let mut left_parts = left.split('.').map(parse_version_part);
-    let mut right_parts = right.split('.').map(parse_version_part);
-
-    loop {
-        match (left_parts.next(), right_parts.next()) {
-            (None, None) => return Ordering::Equal,
-            (left, right) => {
-                let ordering = left.unwrap_or(0).cmp(&right.unwrap_or(0));
-                if ordering != Ordering::Equal {
-                    return ordering;
-                }
-            }
-        }
-    }
-}
-
-fn parse_version_part(part: &str) -> u32 {
-    part.chars()
-        .skip_while(|ch| !ch.is_ascii_digit())
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>()
-        .parse()
-        .unwrap_or(0)
-}
-
-fn missing_tool_error(tool: &str, env_var: &str) -> anyhow::Error {
-    let mise_hint = if command_on_path("mise") {
-        "aubeshim also tried `mise which`; make sure the tool is installed with mise"
-    } else {
-        "mise is not on PATH; install mise first if you expect aubeshim to find tools through mise"
-    };
-    anyhow!("could not find {tool}; set {env_var} to an absolute path, install it another way, or install it with mise. {mise_hint}")
-}
-
-fn missing_mise_error() -> anyhow::Error {
-    anyhow!(
-        "could not find mise; install mise >= {MIN_MISE_VERSION} to use aubeshim global npm tool support"
-    )
-}
-
-fn path_which(name: &str) -> Option<OsString> {
-    path_which_with_filter(name, |_| true)
-}
-
-fn command_on_path(name: &str) -> bool {
-    path_which(name).is_some()
-}
-
-fn path_which_excluding_shims(name: &str) -> Option<OsString> {
-    let shim_dir = default_shim_dir();
-    path_which_with_filter(name, |candidate| {
-        candidate.parent() != Some(shim_dir.as_path())
-    })
-}
-
-fn path_which_with_filter(name: &str, keep: impl Fn(&Path) -> bool) -> Option<OsString> {
-    let paths = env::var_os("PATH")?;
-    for dir in env::split_paths(&paths) {
-        let candidate = dir.join(name);
-        if keep(&candidate) && is_executable_file(&candidate) {
-            return Some(candidate.into_os_string());
-        }
-    }
-    None
-}
-
-fn command_index(args: &[OsString]) -> Option<usize> {
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].to_string_lossy();
-        if arg == "--" {
-            return None;
-        }
-        if arg.starts_with("--") {
-            let name = long_flag_name(&arg);
-            if global_flag_takes_value(name) && !arg.contains('=') {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        if arg.starts_with('-') && arg.len() > 1 {
-            if short_global_flag_takes_value(&arg) {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        return Some(i);
-    }
-    None
-}
-
-fn install_has_packages(args: &[OsString]) -> bool {
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].to_string_lossy();
-        if arg == "--" {
-            return i + 1 < args.len();
-        }
-        if arg.starts_with("--") {
-            let name = long_flag_name(&arg);
-            if install_flag_takes_value(name) && !arg.contains('=') {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        if arg.starts_with('-') && arg.len() > 1 {
-            if short_install_flag_takes_value(&arg) {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        return true;
-    }
-    false
-}
-
-fn has_global_marker(args: &[OsString]) -> bool {
-    args.iter().any(|arg| {
-        let arg = arg.to_string_lossy();
-        is_global_marker(&arg)
-    })
-}
-
-fn has_json_marker(args: &[OsString]) -> bool {
-    args.iter().any(|arg| {
-        let arg = arg.to_string_lossy();
-        arg == "--json" || arg.starts_with("--json=")
-    })
-}
-
-fn translate_npm_install_package_args(args: &[OsString]) -> Vec<OsString> {
-    args.iter()
-        .filter_map(|arg| {
-            let s = arg.to_string_lossy();
-            match s.as_ref() {
-                "--save" | "--save-prod" => None,
-                _ => Some(arg.clone()),
-            }
-        })
-        .collect()
-}
-
-fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
-    args.iter()
-        .filter_map(|arg| {
-            let s = arg.to_string_lossy();
-            match s.as_ref() {
-                "-g" | "--global" => None,
-                "--json" => Some(arg.clone()),
-                value if value.starts_with("--global=") => None,
-                value if value.starts_with('-') => None,
-                package => Some(OsString::from(format!("npm:{package}"))),
-            }
-        })
-        .collect()
-}
-
-fn translate_global_package_args(args: &[OsString]) -> Vec<OsString> {
-    let mut packages = Vec::new();
-    let mut i = 0;
-    let mut literal = false;
-    while i < args.len() {
-        let arg = args[i].to_string_lossy();
-        if !literal && arg == "--" {
-            literal = true;
-            i += 1;
-            continue;
-        }
-        if !literal && is_global_marker(&arg) {
-            i += 1;
-            continue;
-        }
-        if !literal && arg.starts_with("--") {
-            let name = long_flag_name(&arg);
-            if global_package_flag_takes_value(name) && !arg.contains('=') {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        if !literal && arg.starts_with('-') && arg.len() > 1 {
-            if short_global_package_flag_takes_value(&arg) {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        packages.push(OsString::from(format!("npm:{arg}")));
-        i += 1;
-    }
-    packages
-}
-
-fn is_global_marker(arg: &str) -> bool {
-    arg == "-g" || arg == "--global" || arg.starts_with("--global=")
-}
-
-fn normalize_npm_command(command: &str) -> &'static str {
-    match command {
-        "i" | "in" => "install",
-        "un" | "uni" | "uninstall" => "remove",
-        "run-script" => "run",
-        "up" | "upgrade" => "update",
-        other => known_aube_name(other),
-    }
-}
-
-fn npm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
-    match command {
-        "add" | "i" | "in" | "install" => Some(GlobalPackageAction::Use),
-        "remove" | "rm" | "un" | "uni" | "uninstall" => Some(GlobalPackageAction::Unuse),
-        _ => None,
-    }
-}
-
-fn npm_json_metadata_command(command: &str) -> bool {
-    matches!(command, "info" | "show" | "view")
-}
-
-fn pnpm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
-    match command {
-        "add" | "i" | "install" => Some(GlobalPackageAction::Use),
-        "remove" | "rm" | "uninstall" => Some(GlobalPackageAction::Unuse),
-        _ => None,
-    }
-}
-
-fn bun_global_package_action(command: &str) -> Option<GlobalPackageAction> {
-    match command {
-        "add" | "install" => Some(GlobalPackageAction::Use),
-        "remove" => Some(GlobalPackageAction::Unuse),
-        _ => None,
-    }
-}
-
-fn yarn_global_package_action(command: &str) -> Option<GlobalPackageAction> {
-    match command {
-        "add" | "install" | "upgrade" | "up" => Some(GlobalPackageAction::Use),
-        "remove" | "rm" => Some(GlobalPackageAction::Unuse),
-        _ => None,
-    }
-}
-
-fn normalize_yarn_command(command: &str) -> String {
-    match command {
-        "info" => "view".to_owned(),
-        "upgrade" | "up" => "update".to_owned(),
-        other => known_yarn_name(other).unwrap_or(other).to_owned(),
-    }
-}
-
-fn normalize_bun_command(command: &str) -> Option<&'static str> {
-    match command {
-        "add" => Some("add"),
-        "i" | "install" => Some("install"),
-        "link" => Some("link"),
-        "outdated" => Some("outdated"),
-        "publish" => Some("publish"),
-        "remove" | "rm" => Some("remove"),
-        "run" => Some("run"),
-        "unlink" => Some("unlink"),
-        "update" | "upgrade" => Some("update"),
-        "x" => Some("dlx"),
-        _ => None,
-    }
-}
-
-fn bun_run_uses_real_bun(prefix: &[OsString], rest: &[OsString]) -> bool {
-    if prefix.iter().any(|arg| {
-        let arg = arg.to_string_lossy();
-        is_bun_runtime_flag(&arg)
-    }) {
-        return true;
-    }
-
-    let mut i = 0;
-    while i < rest.len() {
-        let arg = rest[i].to_string_lossy();
-        if arg == "--" {
-            return false;
-        }
-        if !arg.starts_with('-') || arg == "-" {
-            return looks_like_bun_file_entrypoint(&arg);
-        }
-        if is_bun_runtime_flag(&arg) {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-fn is_bun_runtime_flag(arg: &str) -> bool {
-    if !arg.starts_with('-') || arg == "-" {
-        return false;
-    }
-    let name = long_flag_name(arg);
-    matches!(
-        name,
-        "bun"
-            | "conditions"
-            | "config"
-            | "console-depth"
-            | "cpu-prof"
-            | "cpu-prof-dir"
-            | "cpu-prof-interval"
-            | "cpu-prof-md"
-            | "cpu-prof-name"
-            | "cwd"
-            | "define"
-            | "dns-result-order"
-            | "drop"
-            | "elide-lines"
-            | "env-file"
-            | "eval"
-            | "expose-gc"
-            | "extension-order"
-            | "feature"
-            | "fetch-preconnect"
-            | "heap-prof"
-            | "heap-prof-dir"
-            | "heap-prof-md"
-            | "heap-prof-name"
-            | "hot"
-            | "if-present"
-            | "import"
-            | "inspect"
-            | "inspect-brk"
-            | "inspect-wait"
-            | "jsx-factory"
-            | "jsx-fragment"
-            | "jsx-import-source"
-            | "jsx-runtime"
-            | "jsx-side-effects"
-            | "loader"
-            | "main-fields"
-            | "max-http-header-size"
-            | "no-addons"
-            | "no-clear-screen"
-            | "no-deprecation"
-            | "no-env-file"
-            | "no-exit-on-error"
-            | "no-install"
-            | "no-macros"
-            | "parallel"
-            | "port"
-            | "preload"
-            | "prefer-latest"
-            | "prefer-offline"
-            | "preserve-symlinks"
-            | "preserve-symlinks-main"
-            | "print"
-            | "redis-preconnect"
-            | "require"
-            | "shell"
-            | "smol"
-            | "sql-preconnect"
-            | "throw-deprecation"
-            | "title"
-            | "tsconfig-override"
-            | "unhandled-rejections"
-            | "use-bundled-ca"
-            | "use-openssl-ca"
-            | "use-system-ca"
-            | "user-agent"
-            | "watch"
-            | "workspaces"
-            | "zero-fill-buffers"
-    ) || matches!(arg, "-b" | "-e" | "-i" | "-p" | "-r")
-}
-
-fn looks_like_bun_file_entrypoint(arg: &str) -> bool {
-    arg == "-"
-        || arg.starts_with("./")
-        || arg.starts_with("../")
-        || arg.starts_with('/')
-        || matches!(
-            Path::new(arg).extension().and_then(OsStr::to_str),
-            Some("cjs" | "cts" | "js" | "jsx" | "mjs" | "mts" | "tsx" | "ts")
-        )
-}
-
-fn known_yarn_name(command: &str) -> Option<&'static str> {
-    match command {
-        "add" => Some("add"),
-        "bin" => Some("bin"),
-        "cache" => Some("cache"),
-        "config" => Some("config"),
-        "create" => Some("create"),
-        "dedupe" => Some("dedupe"),
-        "dlx" => Some("dlx"),
-        "exec" => Some("exec"),
-        "help" => Some("help"),
-        "init" => Some("init"),
-        "install" => Some("install"),
-        "link" => Some("link"),
-        "login" => Some("login"),
-        "logout" => Some("logout"),
-        "outdated" => Some("outdated"),
-        "pack" => Some("pack"),
-        "publish" => Some("publish"),
-        "remove" | "rm" => Some("remove"),
-        "run" => Some("run"),
-        "start" => Some("start"),
-        "test" => Some("test"),
-        "unlink" => Some("unlink"),
-        "version" => Some("version"),
-        "why" => Some("why"),
-        _ => None,
-    }
-}
-
-fn yarn_only_command(command: &str) -> bool {
-    matches!(
-        command,
-        "constraints" | "global" | "node" | "npm" | "plugin" | "set" | "workspaces"
-    )
-}
-
-fn known_aube_name(command: &str) -> &'static str {
-    match command {
-        "add" => "add",
-        "audit" => "audit",
-        "bin" => "bin",
-        "cache" => "cache",
-        "ci" => "ci",
-        "clean" => "clean",
-        "config" => "config",
-        "create" => "create",
-        "dedupe" => "dedupe",
-        "deprecate" => "deprecate",
-        "dist-tag" | "dist-tags" => "dist-tag",
-        "dlx" => "dlx",
-        "exec" | "x" => "exec",
-        "explain" => "why",
-        "help" => "help",
-        "info" | "show" | "view" => "view",
-        "init" => "init",
-        "install" => "install",
-        "licenses" => "licenses",
-        "link" => "link",
-        "list" | "ls" => "list",
-        "login" | "adduser" => "login",
-        "logout" => "logout",
-        "outdated" => "outdated",
-        "pack" => "pack",
-        "prune" => "prune",
-        "publish" => "publish",
-        "rebuild" => "rebuild",
-        "remove" | "rm" => "remove",
-        "restart" => "restart",
-        "root" => "root",
-        "run" => "run",
-        "start" => "start",
-        "stop" => "stop",
-        "test" | "t" => "test",
-        "unpublish" => "unpublish",
-        "update" => "update",
-        "version" => "version",
-        "why" => "why",
-        _ => unreachable!("known_aube_name called with unknown command"),
-    }
-}
-
-fn known_npm_command(command: &str) -> bool {
-    matches!(
-        command,
-        "add"
-            | "adduser"
-            | "audit"
-            | "bin"
-            | "cache"
-            | "ci"
-            | "clean"
-            | "config"
-            | "create"
-            | "dedupe"
-            | "deprecate"
-            | "dist-tag"
-            | "dist-tags"
-            | "dlx"
-            | "exec"
-            | "explain"
-            | "help"
-            | "i"
-            | "in"
-            | "info"
-            | "init"
-            | "install"
-            | "licenses"
-            | "link"
-            | "list"
-            | "login"
-            | "logout"
-            | "ls"
-            | "outdated"
-            | "pack"
-            | "prune"
-            | "publish"
-            | "rebuild"
-            | "remove"
-            | "restart"
-            | "rm"
-            | "root"
-            | "run"
-            | "run-script"
-            | "show"
-            | "start"
-            | "stop"
-            | "t"
-            | "test"
-            | "un"
-            | "uni"
-            | "uninstall"
-            | "unpublish"
-            | "up"
-            | "update"
-            | "upgrade"
-            | "version"
-            | "view"
-            | "why"
-            | "x"
-    ) || npm_only_command(command)
-}
-
-fn npm_only_command(command: &str) -> bool {
-    matches!(
-        command,
-        "owner" | "pkg" | "publish" | "search" | "set-script" | "token" | "unpublish" | "whoami"
-    )
-}
-
-fn global_flag_takes_value(name: &str) -> bool {
-    matches!(
-        name,
-        "cache" | "color" | "loglevel" | "prefix" | "registry" | "userconfig"
-    )
-}
-
-fn global_package_flag_takes_value(name: &str) -> bool {
-    global_flag_takes_value(name) || install_flag_takes_value(name)
-}
-
-fn install_flag_takes_value(name: &str) -> bool {
-    matches!(
-        name,
-        "cache"
-            | "cpu"
-            | "include"
-            | "install-strategy"
-            | "libc"
-            | "loglevel"
-            | "omit"
-            | "os"
-            | "prefix"
-            | "registry"
-            | "save-prefix"
-            | "tag"
-            | "userconfig"
-            | "workspace"
-    )
-}
-
-fn short_global_flag_takes_value(arg: &str) -> bool {
-    matches!(arg, "-C")
-}
-
-fn short_global_package_flag_takes_value(arg: &str) -> bool {
-    short_global_flag_takes_value(arg) || short_install_flag_takes_value(arg)
-}
-
-fn short_install_flag_takes_value(arg: &str) -> bool {
-    matches!(arg, "-C" | "-w")
-}
-
-fn long_flag_name(arg: &str) -> &str {
-    arg.trim_start_matches("--")
-        .split_once('=')
-        .map(|(name, _)| name)
-        .unwrap_or_else(|| arg.trim_start_matches("--"))
-}
-
-fn home_dir() -> PathBuf {
+pub(crate) fn home_dir() -> PathBuf {
     env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn exit_code(status: ExitStatus) -> i32 {
-    if let Some(code) = status.code() {
-        return code;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(signal) = status.signal() {
-            return 128 + signal;
-        }
-    }
-
-    1
-}
-
-fn link_executable(src: &Path, dest: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(src, dest)?;
-    }
-
-    #[cfg(windows)]
-    {
-        fs::copy(src, dest)?;
-    }
-
-    Ok(())
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(meta) = fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::parse_config;
+    use crate::runtime::{
+        compare_dotted_versions, mise_version_from_output, missing_tool_error,
+        unsupported_mise_error,
+    };
+    use std::{cmp::Ordering, ffi::OsString, fs, path::Path};
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
@@ -1222,6 +66,170 @@ mod tests {
         let mut args = vec![command.to_owned(), "-g".to_owned()];
         args.extend(packages.iter().map(|arg| format!("npm:{arg}")));
         args
+    }
+
+    #[test]
+    fn config_defaults_to_shimming() {
+        let repo = repo_fixture();
+        let plan = plan_for_config(
+            ShimTool::Npm,
+            &os(&["install"]),
+            &Config::default(),
+            &repo.cwd,
+        )
+        .unwrap();
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_global_disable_passes_through_to_real_tool() {
+        let repo = repo_fixture();
+        let config = Config {
+            enabled: false,
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Npm, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_global_disable_overrides_shim_glob() {
+        let repo = repo_fixture();
+        let config = Config {
+            enabled: false,
+            shim: vec![repo.root.to_string_lossy().into_owned()],
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Pnpm, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealPnpm);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_shim_glob_overrides_default_disable() {
+        let repo = repo_fixture();
+        let config = Config {
+            default: false,
+            shim: vec![repo.root.to_string_lossy().into_owned()],
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Pnpm, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_default_disable_passes_through_to_real_tool() {
+        let repo = repo_fixture();
+        let config = Config {
+            default: false,
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Npm, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_ignore_glob_overrides_shim_glob() {
+        let repo = repo_fixture();
+        let pattern = repo.root.to_string_lossy().into_owned();
+        let config = Config {
+            enabled: true,
+            default: true,
+            ignore: vec![pattern.clone()],
+            shim: vec![pattern],
+        };
+        let plan = plan_for_config(ShimTool::Yarn, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealYarn);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_globs_match_nearest_git_repo_root() {
+        let repo = repo_fixture();
+        let config = Config {
+            enabled: true,
+            ignore: vec![format!("{}/*", repo.root.parent().unwrap().display())],
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Bun, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealBun);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_single_star_glob_does_not_match_nested_repo_roots() {
+        let repo = nested_repo_fixture();
+        let config = Config {
+            ignore: vec![format!(
+                "{}/*",
+                repo.root
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .display()
+            )],
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Npm, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn config_double_star_glob_matches_nested_repo_roots() {
+        let repo = nested_repo_fixture();
+        let config = Config {
+            ignore: vec![format!(
+                "{}/**",
+                repo.root
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .display()
+            )],
+            ..Config::default()
+        };
+        let plan = plan_for_config(ShimTool::Npm, &os(&["install"]), &config, &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn parses_config_file() {
+        let config = parse_config(
+            r#"
+enabled = false
+default = true
+ignore = ["~/devel/work/broken-expo"]
+shim = ["~/devel/work/*"]
+"#,
+            Path::new("/tmp/aubeshim-config.toml"),
+        )
+        .unwrap();
+
+        assert!(!config.enabled);
+        assert!(config.default);
+        assert_eq!(config.ignore, vec!["~/devel/work/broken-expo"]);
+        assert_eq!(config.shim, vec!["~/devel/work/*"]);
     }
 
     #[test]
@@ -1741,6 +749,38 @@ mod tests {
         assert!(!dir.path().join("npm").exists());
         assert!(!dir.path().join("pnpm").exists());
         assert!(!dir.path().join("yarn").exists());
+    }
+
+    struct RepoFixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        cwd: PathBuf,
+    }
+
+    fn repo_fixture() -> RepoFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        let cwd = root.join("packages/app");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        RepoFixture {
+            _dir: dir,
+            root,
+            cwd,
+        }
+    }
+
+    fn nested_repo_fixture() -> RepoFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repos/work/nested/app");
+        let cwd = root.join("packages/app");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        RepoFixture {
+            _dir: dir,
+            root,
+            cwd,
+        }
     }
 
     fn run_shell_activation(shell: &str, init_shell: Shell, dir: &Path, path: &str) -> String {

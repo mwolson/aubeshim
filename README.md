@@ -136,8 +136,64 @@ path.
 
 ## Configuration
 
+`aubeshim` reads a TOML config file from:
+
+- `AUBESHIM_CONFIG`, when set.
+- `$XDG_CONFIG_HOME/aubeshim/config.toml`, when `XDG_CONFIG_HOME` is set.
+- `~/.config/aubeshim/config.toml`, otherwise.
+
+The config file controls whether a repository uses the aube shim or passes
+through to the real package manager:
+
+```toml
+enabled = true
+default = true
+
+ignore = [
+  "~/devel/work/broken-expo",
+  "~/devel/work/legacy/**",
+]
+
+shim = [
+  "~/devel/work/*",
+  "~/devel/projects/**",
+]
+```
+
+`enabled` controls whether aubeshim does any shimming at all and defaults to
+`true`. When `enabled = false`, every invocation passes through to the real
+`bun`, `npm`, `pnpm`, or `yarn`.
+
+`ignore` is a list of repo globs that should pass through to the real package
+manager. `shim` is a list of repo globs that should use `aube`. `default`
+controls what happens when no repo glob matches and defaults to `true`.
+
+Precedence is:
+
+1. `enabled`
+2. `ignore`
+3. `shim`
+4. `default`
+
+Globs match the nearest Git repo root for the current working directory. This
+means a command run from `packages/app` still matches a glob for the repo root.
+Use absolute paths or `~` so the config keeps working no matter where the
+command starts.
+
+`*` matches within a single path component. `**` is recursive and can match zero
+or more path components, so use it for repos that may live under nested
+directories, such as `~/devel/projects/**`.
+
+For a config managed by `~/dotfiles`, symlink it into the default location:
+
+```sh
+mkdir -p ~/.config/aubeshim
+ln -s ~/dotfiles/aubeshim/config.toml ~/.config/aubeshim/config.toml
+```
+
 Environment variables can override tool discovery:
 
+- `AUBESHIM_CONFIG`: path to the aubeshim config file.
 - `AUBESHIM_AUBE`: path to the aube binary.
 - `AUBESHIM_REAL_BUN`: path to the real Bun binary.
 - `AUBESHIM_REAL_NPM`: path to the real npm binary.
