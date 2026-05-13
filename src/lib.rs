@@ -1,5 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::cmp::Ordering;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
 
 const SHIM_NAMES: &[&str] = &["bun", "npm", "pnpm", "yarn"];
+const MIN_MISE_VERSION: &str = "2026.5.6";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -77,6 +79,7 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Aube,
+    Mise,
     RealBun,
     RealNpm,
     RealPnpm,
@@ -111,10 +114,7 @@ pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
     match tool {
         ShimTool::Bun => plan_bun(args),
         ShimTool::Npm => plan_npm(args),
-        ShimTool::Pnpm => Plan {
-            target: Target::Aube,
-            args: args.to_vec(),
-        },
+        ShimTool::Pnpm => plan_pnpm(args),
         ShimTool::Yarn => plan_yarn(args),
     }
 }
@@ -200,12 +200,28 @@ fn plan_npm(args: &[OsString]) -> Plan {
         };
     }
 
+    if npm_json_metadata_command(&command) && has_json_marker(args) {
+        return Plan {
+            target: Target::RealNpm,
+            args: args.to_vec(),
+        };
+    }
+
+    if command == "outdated" && has_global_marker(args) {
+        return plan_mise_global_outdated(rest);
+    }
+
+    if npm_global_package_operation(&command) && has_global_marker(args) {
+        return Plan {
+            target: Target::RealNpm,
+            args: args.to_vec(),
+        };
+    }
+
     if matches!(command.as_str(), "install" | "i" | "in") && install_has_packages(rest) {
-        let (prefix, moved) = move_global_markers(prefix);
         let mut out = Vec::with_capacity(args.len());
-        out.extend(prefix);
+        out.extend_from_slice(prefix);
         out.push(OsString::from("add"));
-        out.extend(moved);
         out.extend(translate_npm_install_package_args(rest));
         return Plan {
             target: Target::Aube,
@@ -220,6 +236,26 @@ fn plan_npm(args: &[OsString]) -> Plan {
     Plan {
         target: Target::Aube,
         args: out,
+    }
+}
+
+fn plan_pnpm(args: &[OsString]) -> Plan {
+    if let Some(command_idx) = command_index(args) {
+        let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+        if command == "outdated" && has_global_marker(args) {
+            return plan_mise_global_outdated(&args[command_idx + 1..]);
+        }
+        if pnpm_global_package_operation(&command) && has_global_marker(args) {
+            return Plan {
+                target: Target::RealPnpm,
+                args: args.to_vec(),
+            };
+        }
+    }
+
+    Plan {
+        target: Target::Aube,
+        args: args.to_vec(),
     }
 }
 
@@ -240,6 +276,17 @@ fn plan_bun(args: &[OsString]) -> Plan {
             args: args.to_vec(),
         };
     };
+
+    if command == "outdated" && has_global_marker(args) {
+        return plan_mise_global_outdated(rest);
+    }
+
+    if bun_global_package_operation(command) && has_global_marker(args) {
+        return Plan {
+            target: Target::RealBun,
+            args: args.to_vec(),
+        };
+    }
 
     let mut out = Vec::with_capacity(args.len());
     out.extend_from_slice(prefix);
@@ -275,6 +322,17 @@ fn plan_yarn(args: &[OsString]) -> Plan {
         };
     }
 
+    if command == "outdated" && has_global_marker(args) {
+        return plan_mise_global_outdated(rest);
+    }
+
+    if yarn_global_package_operation(&command) && has_global_marker(args) {
+        return Plan {
+            target: Target::RealYarn,
+            args: args.to_vec(),
+        };
+    }
+
     let mut out = Vec::with_capacity(args.len());
     out.extend_from_slice(prefix);
     out.push(OsString::from(normalize_yarn_command(&command)));
@@ -285,13 +343,27 @@ fn plan_yarn(args: &[OsString]) -> Plan {
     }
 }
 
+fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
+    let mut out = vec![
+        OsString::from("outdated"),
+        OsString::from("--bump"),
+        OsString::from("-C"),
+        home_dir().into_os_string(),
+    ];
+    out.extend(translate_global_outdated_args(args));
+    Plan {
+        target: Target::Mise,
+        args: out,
+    }
+}
+
 fn run_plan(plan: Plan) -> Result<ExitStatus> {
     let program = resolve_target(plan.target)?;
     let mut cmd = ProcessCommand::new(&program);
     cmd.args(&plan.args);
 
     if matches!(plan.target, Target::Aube) && env::var_os("AUBE_NPM_PATH").is_none() {
-        if let Some(npm) = resolve_real_npm() {
+        if let Some(npm) = resolve_real_npm()? {
             cmd.env("AUBE_NPM_PATH", npm);
         }
     }
@@ -302,64 +374,169 @@ fn run_plan(plan: Plan) -> Result<ExitStatus> {
 
 fn resolve_target(target: Target) -> Result<OsString> {
     match target {
-        Target::Aube => resolve_aube().context("could not find aube"),
-        Target::RealBun => resolve_real_bun().context("could not find real bun"),
-        Target::RealNpm => resolve_real_npm().context("could not find real npm"),
-        Target::RealPnpm => resolve_real_pnpm().context("could not find real pnpm"),
-        Target::RealYarn => resolve_real_yarn().context("could not find real yarn"),
+        Target::Aube => resolve_aube()?.ok_or_else(|| missing_tool_error("aube", "AUBESHIM_AUBE")),
+        Target::Mise => resolve_mise()?.ok_or_else(missing_mise_error),
+        Target::RealBun => {
+            resolve_real_bun()?.ok_or_else(|| missing_tool_error("real bun", "AUBESHIM_REAL_BUN"))
+        }
+        Target::RealNpm => {
+            resolve_real_npm()?.ok_or_else(|| missing_tool_error("real npm", "AUBESHIM_REAL_NPM"))
+        }
+        Target::RealPnpm => resolve_real_pnpm()?
+            .ok_or_else(|| missing_tool_error("real pnpm", "AUBESHIM_REAL_PNPM")),
+        Target::RealYarn => resolve_real_yarn()?
+            .ok_or_else(|| missing_tool_error("real yarn", "AUBESHIM_REAL_YARN")),
     }
 }
 
-fn resolve_aube() -> Option<OsString> {
-    env::var_os("AUBESHIM_AUBE")
-        .or_else(|| mise_which("aube"))
-        .or_else(|| path_which("aube"))
+fn resolve_mise() -> Result<Option<OsString>> {
+    let Some(mise) = path_which("mise") else {
+        return Ok(None);
+    };
+    ensure_supported_mise(&mise)?;
+    Ok(Some(mise))
 }
 
-fn resolve_real_bun() -> Option<OsString> {
-    env::var_os("AUBESHIM_REAL_BUN")
-        .or_else(|| mise_which("bun"))
-        .or_else(|| path_which_excluding_shims("bun"))
+fn resolve_aube() -> Result<Option<OsString>> {
+    resolve_tool("aube", "AUBESHIM_AUBE", path_which)
 }
 
-fn resolve_real_npm() -> Option<OsString> {
-    env::var_os("AUBESHIM_REAL_NPM")
-        .or_else(|| mise_which("npm"))
-        .or_else(|| path_which_excluding_shims("npm"))
+fn resolve_real_bun() -> Result<Option<OsString>> {
+    resolve_tool("bun", "AUBESHIM_REAL_BUN", path_which_excluding_shims)
 }
 
-fn resolve_real_pnpm() -> Option<OsString> {
-    env::var_os("AUBESHIM_REAL_PNPM")
-        .or_else(|| mise_which("pnpm"))
-        .or_else(|| path_which_excluding_shims("pnpm"))
+fn resolve_real_npm() -> Result<Option<OsString>> {
+    resolve_tool("npm", "AUBESHIM_REAL_NPM", path_which_excluding_shims)
 }
 
-fn resolve_real_yarn() -> Option<OsString> {
-    env::var_os("AUBESHIM_REAL_YARN")
-        .or_else(|| mise_which("yarn"))
-        .or_else(|| path_which_excluding_shims("yarn"))
+fn resolve_real_pnpm() -> Result<Option<OsString>> {
+    resolve_tool("pnpm", "AUBESHIM_REAL_PNPM", path_which_excluding_shims)
 }
 
-fn mise_which(tool: &str) -> Option<OsString> {
-    let output = ProcessCommand::new("mise")
+fn resolve_real_yarn() -> Result<Option<OsString>> {
+    resolve_tool("yarn", "AUBESHIM_REAL_YARN", path_which_excluding_shims)
+}
+
+fn resolve_tool(
+    tool: &str,
+    env_var: &str,
+    path_lookup: fn(&str) -> Option<OsString>,
+) -> Result<Option<OsString>> {
+    if let Some(path) = env::var_os(env_var) {
+        return Ok(Some(path));
+    }
+
+    if let Some(path) = mise_which(tool)? {
+        return Ok(Some(path));
+    }
+
+    Ok(path_lookup(tool))
+}
+
+fn mise_which(tool: &str) -> Result<Option<OsString>> {
+    let Some(mise) = path_which("mise") else {
+        return Ok(None);
+    };
+    ensure_supported_mise(&mise)?;
+
+    let output = ProcessCommand::new(&mise)
         .arg("which")
         .arg(tool)
         .output()
-        .ok()?;
+        .with_context(|| format!("failed to run {}", PathBuf::from(&mise).display()))?;
     if !output.status.success() {
-        return None;
+        return Ok(None);
     }
-    let path = String::from_utf8(output.stdout).ok()?;
+    let path = String::from_utf8(output.stdout).context("mise which output was not UTF-8")?;
     let path = path.trim();
     if path.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(OsString::from(path))
+        Ok(Some(OsString::from(path)))
     }
+}
+
+fn ensure_supported_mise(mise: &OsStr) -> Result<()> {
+    let output = ProcessCommand::new(mise)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("failed to run {}", PathBuf::from(mise).display()))?;
+    if !output.status.success() {
+        bail!(
+            "failed to check mise version with {}",
+            PathBuf::from(mise).display()
+        );
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("mise --version output was not UTF-8")?;
+    let version = mise_version_from_output(&stdout)
+        .ok_or_else(|| anyhow!("could not parse mise version from `{}`", stdout.trim()))?;
+    if compare_dotted_versions(version, MIN_MISE_VERSION) == Ordering::Less {
+        return Err(unsupported_mise_error(version));
+    }
+
+    Ok(())
+}
+
+fn mise_version_from_output(output: &str) -> Option<&str> {
+    output
+        .split_whitespace()
+        .find(|token| token.chars().any(|ch| ch.is_ascii_digit()))
+}
+
+fn unsupported_mise_error(version: &str) -> anyhow::Error {
+    anyhow!(
+        "mise {version} is too old for aubeshim; install mise >= {MIN_MISE_VERSION}. Arch Linux's mise package may lag behind the version needed for aube support."
+    )
+}
+
+fn compare_dotted_versions(left: &str, right: &str) -> Ordering {
+    let mut left_parts = left.split('.').map(parse_version_part);
+    let mut right_parts = right.split('.').map(parse_version_part);
+
+    loop {
+        match (left_parts.next(), right_parts.next()) {
+            (None, None) => return Ordering::Equal,
+            (left, right) => {
+                let ordering = left.unwrap_or(0).cmp(&right.unwrap_or(0));
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+        }
+    }
+}
+
+fn parse_version_part(part: &str) -> u32 {
+    part.chars()
+        .skip_while(|ch| !ch.is_ascii_digit())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+
+fn missing_tool_error(tool: &str, env_var: &str) -> anyhow::Error {
+    let mise_hint = if command_on_path("mise") {
+        "aubeshim also tried `mise which`; make sure the tool is installed with mise"
+    } else {
+        "mise is not on PATH; install mise first if you expect aubeshim to find tools through mise"
+    };
+    anyhow!("could not find {tool}; set {env_var} to an absolute path, install it another way, or install it with mise. {mise_hint}")
+}
+
+fn missing_mise_error() -> anyhow::Error {
+    anyhow!(
+        "could not find mise; install mise >= {MIN_MISE_VERSION} to use aubeshim global outdated support"
+    )
 }
 
 fn path_which(name: &str) -> Option<OsString> {
     path_which_with_filter(name, |_| true)
+}
+
+fn command_on_path(name: &str) -> bool {
+    path_which(name).is_some()
 }
 
 fn path_which_excluding_shims(name: &str) -> Option<OsString> {
@@ -438,6 +615,20 @@ fn install_has_packages(args: &[OsString]) -> bool {
     false
 }
 
+fn has_global_marker(args: &[OsString]) -> bool {
+    args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "-g" || arg == "--global" || arg.starts_with("--global=")
+    })
+}
+
+fn has_json_marker(args: &[OsString]) -> bool {
+    args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--json" || arg.starts_with("--json=")
+    })
+}
+
 fn translate_npm_install_package_args(args: &[OsString]) -> Vec<OsString> {
     args.iter()
         .filter_map(|arg| {
@@ -450,16 +641,19 @@ fn translate_npm_install_package_args(args: &[OsString]) -> Vec<OsString> {
         .collect()
 }
 
-fn move_global_markers(args: &[OsString]) -> (Vec<OsString>, Vec<OsString>) {
-    let mut prefix = Vec::new();
-    let mut moved = Vec::new();
-    for arg in args {
-        match arg.to_string_lossy().as_ref() {
-            "-g" | "--global" => moved.push(arg.clone()),
-            _ => prefix.push(arg.clone()),
-        }
-    }
-    (prefix, moved)
+fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
+    args.iter()
+        .filter_map(|arg| {
+            let s = arg.to_string_lossy();
+            match s.as_ref() {
+                "-g" | "--global" => None,
+                "--json" => Some(arg.clone()),
+                value if value.starts_with("--global=") => None,
+                value if value.starts_with('-') => None,
+                package => Some(OsString::from(format!("npm:{package}"))),
+            }
+        })
+        .collect()
 }
 
 fn normalize_npm_command(command: &str) -> &'static str {
@@ -470,6 +664,35 @@ fn normalize_npm_command(command: &str) -> &'static str {
         "up" | "upgrade" => "update",
         other => known_aube_name(other),
     }
+}
+
+fn npm_global_package_operation(command: &str) -> bool {
+    matches!(
+        command,
+        "add" | "i" | "in" | "install" | "remove" | "rm" | "un" | "uni" | "uninstall"
+    )
+}
+
+fn npm_json_metadata_command(command: &str) -> bool {
+    matches!(command, "info" | "show" | "view")
+}
+
+fn pnpm_global_package_operation(command: &str) -> bool {
+    matches!(
+        command,
+        "add" | "i" | "install" | "remove" | "rm" | "uninstall"
+    )
+}
+
+fn bun_global_package_operation(command: &str) -> bool {
+    matches!(command, "add" | "install" | "remove")
+}
+
+fn yarn_global_package_operation(command: &str) -> bool {
+    matches!(
+        command,
+        "add" | "install" | "remove" | "rm" | "upgrade" | "up"
+    )
 }
 
 fn normalize_yarn_command(command: &str) -> String {
@@ -762,6 +985,17 @@ mod tests {
             .collect()
     }
 
+    fn mise_global_outdated_args(extra: &[&str]) -> Vec<String> {
+        let mut args = vec![
+            "outdated".to_owned(),
+            "--bump".to_owned(),
+            "-C".to_owned(),
+            home_dir().to_string_lossy().into_owned(),
+        ];
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args
+    }
+
     #[test]
     fn npm_install_without_packages_uses_aube_install() {
         let plan = plan_for(ShimTool::Npm, &os(&["install"]));
@@ -793,11 +1027,55 @@ mod tests {
     }
 
     #[test]
-    fn npm_global_install_with_package_becomes_global_add() {
+    fn npm_global_install_with_package_uses_real_npm() {
         let plan = plan_for(ShimTool::Npm, &os(&["-g", "install", "cowsay"]));
 
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["-g", "install", "cowsay"]);
+    }
+
+    #[test]
+    fn npm_global_remove_uses_real_npm() {
+        let remove = plan_for(ShimTool::Npm, &os(&["remove", "--global", "cowsay"]));
+
+        assert_eq!(remove.target, Target::RealNpm);
+        assert_eq!(strings(&remove.args), vec!["remove", "--global", "cowsay"]);
+    }
+
+    #[test]
+    fn npm_global_outdated_uses_mise() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&["outdated", "--global", "@biomejs/biome"]),
+        );
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            mise_global_outdated_args(&["npm:@biomejs/biome"])
+        );
+    }
+
+    #[test]
+    fn npm_json_metadata_commands_use_real_npm() {
+        for args in [
+            &["view", "prettier", "dist-tags", "--json"][..],
+            &["show", "typescript", "version", "--json=true"][..],
+            &["info", "eslint", "--json"][..],
+        ] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_metadata_without_json_still_uses_aube_view() {
+        let plan = plan_for(ShimTool::Npm, &os(&["show", "typescript", "version"]));
+
         assert_eq!(plan.target, Target::Aube);
-        assert_eq!(strings(&plan.args), vec!["add", "-g", "cowsay"]);
+        assert_eq!(strings(&plan.args), vec!["view", "typescript", "version"]);
     }
 
     #[test]
@@ -841,6 +1119,28 @@ mod tests {
     }
 
     #[test]
+    fn pnpm_global_package_operations_use_real_pnpm() {
+        for args in [
+            &["add", "-g", "cowsay"][..],
+            &["install", "--global", "typescript"][..],
+            &["remove", "-g", "cowsay"][..],
+        ] {
+            let plan = plan_for(ShimTool::Pnpm, &os(args));
+
+            assert_eq!(plan.target, Target::RealPnpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn pnpm_global_outdated_uses_mise() {
+        let plan = plan_for(ShimTool::Pnpm, &os(&["outdated", "-g"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), mise_global_outdated_args(&[]));
+    }
+
+    #[test]
     fn bun_install_uses_aube_install() {
         let plan = plan_for(ShimTool::Bun, &os(&["install", "--frozen-lockfile"]));
 
@@ -854,6 +1154,28 @@ mod tests {
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["run", "dev"]);
+    }
+
+    #[test]
+    fn bun_global_package_operations_use_real_bun() {
+        for args in [
+            &["add", "-g", "cowsay"][..],
+            &["install", "--global", "typescript"][..],
+            &["remove", "-g", "cowsay"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_global_outdated_uses_mise() {
+        let plan = plan_for(ShimTool::Bun, &os(&["outdated", "-g", "--json"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), mise_global_outdated_args(&["--json"]));
     }
 
     #[test]
@@ -889,11 +1211,85 @@ mod tests {
     }
 
     #[test]
+    fn yarn_global_package_operations_use_real_yarn() {
+        for args in [
+            &["add", "-g", "cowsay"][..],
+            &["install", "--global", "typescript"][..],
+            &["remove", "-g", "cowsay"][..],
+        ] {
+            let plan = plan_for(ShimTool::Yarn, &os(args));
+
+            assert_eq!(plan.target, Target::RealYarn);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn yarn_global_outdated_uses_mise() {
+        let plan = plan_for(
+            ShimTool::Yarn,
+            &os(&["outdated", "--global=true", "oxlint"]),
+        );
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            mise_global_outdated_args(&["npm:oxlint"])
+        );
+    }
+
+    #[test]
     fn yarn_only_command_uses_real_yarn() {
         let plan = plan_for(ShimTool::Yarn, &os(&["plugin", "list"]));
 
         assert_eq!(plan.target, Target::RealYarn);
         assert_eq!(strings(&plan.args), vec!["plugin", "list"]);
+    }
+
+    #[test]
+    fn missing_tool_error_mentions_mise_and_override() {
+        let message = missing_tool_error("real npm", "AUBESHIM_REAL_NPM").to_string();
+
+        assert!(message.contains("could not find real npm"));
+        assert!(message.contains("AUBESHIM_REAL_NPM"));
+        assert!(message.contains("mise"));
+    }
+
+    #[test]
+    fn parses_mise_version_prefix() {
+        assert_eq!(
+            mise_version_from_output("2026.5.6 linux-x64 (2026-05-11)"),
+            Some("2026.5.6")
+        );
+        assert_eq!(
+            mise_version_from_output("mise 2026.5.6 linux-x64"),
+            Some("2026.5.6")
+        );
+    }
+
+    #[test]
+    fn compares_dotted_versions_numerically() {
+        assert_eq!(
+            compare_dotted_versions("2026.5.6", "2026.5.6"),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_dotted_versions("2026.5.10", "2026.5.6"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_dotted_versions("2026.5.5", "2026.5.6"),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn unsupported_mise_error_mentions_arch_and_minimum() {
+        let message = unsupported_mise_error("2026.5.5").to_string();
+
+        assert!(message.contains("mise 2026.5.5 is too old"));
+        assert!(message.contains("mise >= 2026.5.6"));
+        assert!(message.contains("Arch Linux"));
     }
 
     #[test]
