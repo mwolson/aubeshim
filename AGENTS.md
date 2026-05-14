@@ -86,8 +86,8 @@ Repro conventions:
 - Add or update the root README case list with the observed aube version for
   each issue, so later cases can be compared across releases.
 - Include a `repro.sh` for each case. Use `#!/bin/bash`, `set -euo pipefail`,
-  fail fast when required tools are missing, and exit non-zero when the bug is
-  not observed.
+  fail fast when required tools are missing, and use normal test semantics: exit
+  zero when aube behaves correctly and non-zero when the issue is observed.
 - Do not commit `node_modules` or generated runtime artifacts. Keep
   `node_modules/` ignored in the repro repo.
 - Do not commit discussion drafts or report prose to the repro repo unless the
