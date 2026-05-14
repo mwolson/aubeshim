@@ -235,3 +235,8 @@ commands to `mise outdated --bump -C "$HOME"` and passes package arguments as
 Direct global add/install/remove commands for named packages also use mise.
 Examples include `npm install -g prettier`, `pnpm add -g eslint`,
 `bun add -g typescript`, and `yarn remove -g cowsay`.
+
+## Compatibility Notes
+
+Known package-manager interop findings that need later upstream reports are
+tracked in [ISSUES.md](ISSUES.md).
