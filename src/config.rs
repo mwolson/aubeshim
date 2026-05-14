@@ -57,7 +57,7 @@ pub(crate) fn parse_config(content: &str, path: &Path) -> Result<Config> {
 
 fn validate_config(config: &Config) -> Result<()> {
     for pattern in config.ignore.iter().chain(config.shim.iter()) {
-        compile_repo_glob(pattern)?;
+        compile_dir_glob(pattern)?;
     }
     Ok(())
 }
@@ -67,48 +67,48 @@ pub(crate) fn should_shim(config: &Config, cwd: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    let repo = repo_dir(cwd);
-    if matches_repo_glob(&config.ignore, &repo)? {
+    if matches_dir_glob(&config.ignore, cwd)? {
         return Ok(false);
     }
-    if matches_repo_glob(&config.shim, &repo)? {
+    if matches_dir_glob(&config.shim, cwd)? {
         return Ok(true);
     }
     Ok(config.default)
 }
 
-fn matches_repo_glob(patterns: &[String], repo: &Path) -> Result<bool> {
+fn matches_dir_glob(patterns: &[String], cwd: &Path) -> Result<bool> {
     for pattern in patterns {
-        if matches_repo_glob_pattern(pattern, repo)? {
+        if matches_dir_glob_pattern(pattern, cwd)? {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn matches_repo_glob_pattern(pattern: &str, repo: &Path) -> Result<bool> {
+fn matches_dir_glob_pattern(pattern: &str, cwd: &Path) -> Result<bool> {
     let pattern = expand_home(pattern);
-    if matches_expanded_repo_glob(&pattern, repo)? {
+    if matches_expanded_dir_glob(&pattern, cwd)? {
         return Ok(true);
     }
     if let Some(base) = pattern.strip_suffix("/**") {
-        return matches_expanded_repo_glob(base, repo);
+        return matches_expanded_dir_glob(base, cwd);
     }
     Ok(false)
 }
 
-fn matches_expanded_repo_glob(pattern: &str, repo: &Path) -> Result<bool> {
-    Ok(Pattern::new(pattern)
-        .with_context(|| format!("invalid repo glob `{pattern}`"))?
-        .matches_path_with(repo, repo_glob_match_options()))
+fn matches_expanded_dir_glob(pattern: &str, cwd: &Path) -> Result<bool> {
+    let pattern = Pattern::new(pattern).with_context(|| format!("invalid dir glob `{pattern}`"))?;
+    Ok(cwd
+        .ancestors()
+        .any(|dir| pattern.matches_path_with(dir, dir_glob_match_options())))
 }
 
-fn compile_repo_glob(pattern: &str) -> Result<Pattern> {
+fn compile_dir_glob(pattern: &str) -> Result<Pattern> {
     let pattern = expand_home(pattern);
-    Pattern::new(&pattern).with_context(|| format!("invalid repo glob `{pattern}`"))
+    Pattern::new(&pattern).with_context(|| format!("invalid dir glob `{pattern}`"))
 }
 
-fn repo_glob_match_options() -> MatchOptions {
+fn dir_glob_match_options() -> MatchOptions {
     MatchOptions {
         case_sensitive: true,
         require_literal_separator: true,
@@ -126,25 +126,12 @@ fn expand_home(pattern: &str) -> String {
     pattern.to_owned()
 }
 
-fn repo_dir(cwd: &Path) -> PathBuf {
-    let mut dir = cwd;
-    loop {
-        if dir.join(".git").exists() {
-            return dir.to_path_buf();
-        }
-        let Some(parent) = dir.parent() else {
-            return cwd.to_path_buf();
-        };
-        dir = parent;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn expands_leading_tilde_in_repo_globs() {
+    fn expands_leading_tilde_in_dir_globs() {
         let home = home_dir();
 
         assert_eq!(expand_home("~"), home.to_string_lossy());
@@ -156,9 +143,24 @@ mod tests {
     }
 
     #[test]
-    fn trailing_double_star_matches_base_repo_dir() {
-        let repo = home_dir().join("devel/alairo");
+    fn dir_globs_match_current_dir_or_ancestors() {
+        let root = home_dir().join("devel/alairo/iow/amp/amp-mobile");
+        let cwd = root.join("components/forms");
 
-        assert!(matches_repo_glob_pattern("~/devel/alairo/**", &repo).unwrap());
+        assert!(matches_dir_glob_pattern(&root.to_string_lossy(), &cwd).unwrap());
+    }
+
+    #[test]
+    fn single_star_dir_globs_match_descendants_of_selected_dirs() {
+        let cwd = home_dir().join("devel/alairo/iow/amp/amp-mobile/components");
+
+        assert!(matches_dir_glob_pattern("~/devel/alairo/iow/amp/*", &cwd).unwrap());
+    }
+
+    #[test]
+    fn trailing_double_star_matches_base_dir() {
+        let cwd = home_dir().join("devel/alairo");
+
+        assert!(matches_dir_glob_pattern("~/devel/alairo/**", &cwd).unwrap());
     }
 }

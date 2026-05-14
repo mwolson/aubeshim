@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn config_globs_match_nearest_git_repo_root() {
+    fn config_globs_match_selected_ancestor_dirs() {
         let repo = repo_fixture();
         let config = Config {
             enabled: true,
@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn config_single_star_glob_does_not_match_nested_repo_roots() {
+    fn config_single_star_glob_matches_descendants_of_selected_dirs() {
         let repo = nested_repo_fixture();
         let config = Config {
             ignore: vec![format!(
@@ -222,12 +222,12 @@ mod tests {
         };
         let plan = plan_for_config(ShimTool::Npm, &os(&["install"]), &config, &repo.cwd).unwrap();
 
-        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["install"]);
     }
 
     #[test]
-    fn config_double_star_glob_matches_nested_repo_roots() {
+    fn config_double_star_glob_matches_nested_dirs() {
         let repo = nested_repo_fixture();
         let config = Config {
             ignore: vec![format!(

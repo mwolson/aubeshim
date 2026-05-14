@@ -145,7 +145,7 @@ path.
 - `$XDG_CONFIG_HOME/aubeshim/config.toml`, when `XDG_CONFIG_HOME` is set.
 - `~/.config/aubeshim/config.toml`, otherwise.
 
-The config file controls whether a repository uses the aube shim or passes
+The config file controls whether a directory uses the aube shim or passes
 through to the real package manager:
 
 ```toml
@@ -167,9 +167,10 @@ shim = [
 `true`. When `enabled = false`, every invocation passes through to the real
 `bun`, `npm`, `pnpm`, or `yarn`.
 
-`ignore` is a list of repo globs that should pass through to the real package
-manager. `shim` is a list of repo globs that should use `aube`. `default`
-controls what happens when no repo glob matches and defaults to `true`.
+`ignore` is a list of directory globs that should pass through to the real
+package manager. `shim` is a list of directory globs that should use `aube`.
+`default` controls what happens when no directory glob matches and defaults to
+`true`.
 
 Precedence is:
 
@@ -178,15 +179,17 @@ Precedence is:
 3. `shim`
 4. `default`
 
-Globs match the nearest Git repo root for the current working directory. This
-means a command run from `packages/app` still matches a glob for the repo root.
-Use absolute paths or `~` so the config keeps working no matter where the
-command starts.
+Globs match the current working directory or any ancestor directory. This means
+a command run from `packages/app` still matches a glob for the package,
+workspace, or parent directory that contains it. Use absolute paths or `~` so
+the config keeps working no matter where the command starts.
 
-`*` matches within a single path component. `**` is recursive and can match zero
-or more path components, so use it for repos that may live under nested
-directories, such as `~/devel/projects/**`. A trailing `/**` also matches the
-base repo directory itself.
+`*` matches within a single path component. Because globs are checked against
+the current directory and its ancestors, `~/devel/work/*` matches commands run
+inside any immediate child directory of `~/devel/work`. `**` is recursive and
+can match zero or more path components, so use it for directories that may live
+under nested paths, such as `~/devel/projects/**`. A trailing `/**` also matches
+the base directory itself.
 
 For a config managed by `~/dotfiles`, symlink it into the default location:
 
