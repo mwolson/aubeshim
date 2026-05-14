@@ -14,6 +14,20 @@ Context:
 - aube version observed: `1.12.0`.
 - aubeshim version observed: `0.4.1`.
 
+Retest with aube `1.13.1` on 2026-05-14:
+
+- Still reproduces. After aube repaired a stale npm lock, the rewritten
+  `package-lock.json` had the root `expo-router` dependency spec but still no
+  `packages["node_modules/expo-router"]` entry.
+- A clean frozen aube install from that rewritten lock omitted
+  `node_modules/expo-router`, and typecheck failed with missing `expo-router`
+  imports.
+- No matching upstream aube discussion or issue was found for this specific npm
+  lockfile writer failure.
+- Minimal repro:
+  https://github.com/mwolson/tmp-aube-issues/tree/main/npm-lock-missing-entry
+- Upstream discussion: https://github.com/endevco/aube/discussions/690
+
 Findings:
 
 - aube can consume a valid npm generated `package-lock.json` for this project. A
@@ -69,6 +83,21 @@ Context:
 - Lockfile: Bun text `bun.lock`.
 - aube version observed: `1.12.0`.
 - aubeshim version observed: `0.4.1`.
+
+Retest with aube `1.13.1` on 2026-05-14:
+
+- Still reproduces. After a frozen aube install from Bun's text lockfile,
+  `packages/client-runtime/node_modules/@t3tools/contracts` pointed to the
+  workspace root instead of `packages/contracts`.
+- `aube run typecheck` failed in `@t3tools/client-runtime` because
+  `@t3tools/contracts` could not be resolved.
+- No matching upstream aube discussion or issue was found for this specific
+  workspace symlink target failure.
+- Minimal repro:
+  https://github.com/mwolson/tmp-aube-issues/tree/main/bun-workspace-link
+- Upstream discussion: https://github.com/endevco/aube/discussions/691
+- The separate Bun lock rewrite failure still reproduces and appears to match
+  upstream discussion https://github.com/endevco/aube/discussions/248.
 
 Findings:
 
