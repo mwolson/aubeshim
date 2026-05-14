@@ -32,6 +32,26 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+## Migration notes
+
+When a project fails under `aube` or aubeshim after working with npm-style
+hoisting, first check whether the project imports transitive dependencies that
+are not declared in its own `package.json`. Prefer adding those direct
+dependencies before reaching for a hoisted linker setting.
+
+Use a hoisted linker profile as a compatibility fallback for projects whose
+dependency trees are too messy to clean up quickly, especially Expo or React
+Native apps. Keep `aube.allowBuilds` separate from linker decisions: it handles
+lifecycle script approval, while hoisting handles module resolution shape.
+
+Treat lockfile ownership as a separate compatibility question. A hoisted aube
+install can make a local project work while still writing a `package-lock.json`
+that npm rejects or that a later frozen aube install cannot reproduce. For
+projects with npm coworkers, verify `npm ci` after any aube-authored
+`package-lock.json`, or keep npm responsible for writing the lockfile. If a
+project is ready to lean fully into aube, consider importing to a native
+`aube-lock.yaml` instead of mixing aube lockfile writes with npm workflows.
+
 ## Releasing
 
 1. Check for uncommitted changes and fetch tags:
