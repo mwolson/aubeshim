@@ -61,9 +61,11 @@ under this repo's ignored `tmp/min-repros` directory when present.
 Before creating or updating a repro:
 
 1. Retest with the current `aube --version` and record the exact version.
-2. Check upstream aube issues and discussions for a matching report. If a broad
-   existing discussion already covers the behavior, cite it instead of making a
-   duplicate minimal repro unless the new case adds a clearly useful angle.
+2. Check upstream aube discussions and pull requests for a matching report.
+   GitHub issues are disabled for the aube repo, so discussions are the main
+   upstream venue. If a broad existing discussion already covers the behavior,
+   cite it instead of making a duplicate minimal repro unless the new case adds
+   a clearly useful angle.
 3. Read the relevant official docs to make sure the behavior is not intentional,
    especially:
 

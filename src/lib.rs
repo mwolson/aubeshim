@@ -388,6 +388,25 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn npm_install_omit_filters_use_aube_equivalents() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&["ci", "--omit", "optional", "--omit=dev"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["ci", "--no-optional", "--prod"]);
+    }
+
+    #[test]
+    fn npm_install_unsupported_omit_filter_uses_real_npm() {
+        let plan = plan_for(ShimTool::Npm, &os(&["ci", "--omit=peer"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["ci", "--omit=peer"]);
+    }
+
+    #[test]
     fn npm_run_script_uses_aube_run() {
         let plan = plan_for(ShimTool::Npm, &os(&["run-script", "build"]));
 
@@ -469,6 +488,28 @@ shim = ["~/devel/work/*"]
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
+    }
+
+    #[test]
+    fn bun_install_omit_optional_uses_aube_no_optional() {
+        let plan = plan_for(
+            ShimTool::Bun,
+            &os(&["install", "--production", "--omit", "optional"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["install", "--production", "--no-optional"]
+        );
+    }
+
+    #[test]
+    fn bun_install_unsupported_omit_filter_uses_real_bun() {
+        let plan = plan_for(ShimTool::Bun, &os(&["install", "--omit=peer"]));
+
+        assert_eq!(plan.target, Target::RealBun);
+        assert_eq!(strings(&plan.args), vec!["install", "--omit=peer"]);
     }
 
     #[test]
@@ -583,6 +624,14 @@ shim = ["~/devel/work/*"]
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["--version"]);
+    }
+
+    #[test]
+    fn yarn_install_ignore_optional_uses_aube_no_optional() {
+        let plan = plan_for(ShimTool::Yarn, &os(&["install", "--ignore-optional"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install", "--no-optional"]);
     }
 
     #[test]

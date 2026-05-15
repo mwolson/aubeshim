@@ -112,7 +112,17 @@ fn plan_npm(args: &[OsString]) -> Plan {
     let mut out = Vec::with_capacity(args.len());
     out.extend_from_slice(prefix);
     out.push(OsString::from(normalize_npm_command(&command)));
-    out.extend_from_slice(rest);
+    if matches!(command.as_str(), "ci" | "install" | "i" | "in") {
+        let Some(translated) = translate_omit_args(rest) else {
+            return Plan {
+                target: Target::RealNpm,
+                args: args.to_vec(),
+            };
+        };
+        out.extend(translated);
+    } else {
+        out.extend_from_slice(rest);
+    }
     Plan {
         target: Target::Aube,
         args: out,
@@ -183,7 +193,17 @@ fn plan_bun(args: &[OsString]) -> Plan {
     let mut out = Vec::with_capacity(args.len());
     out.extend_from_slice(prefix);
     out.push(OsString::from(command));
-    out.extend_from_slice(rest);
+    if command == "install" {
+        let Some(translated) = translate_omit_args(rest) else {
+            return Plan {
+                target: Target::RealBun,
+                args: args.to_vec(),
+            };
+        };
+        out.extend(translated);
+    } else {
+        out.extend_from_slice(rest);
+    }
     Plan {
         target: Target::Aube,
         args: out,
@@ -230,7 +250,11 @@ fn plan_yarn(args: &[OsString]) -> Plan {
     let mut out = Vec::with_capacity(args.len());
     out.extend_from_slice(prefix);
     out.push(OsString::from(normalize_yarn_command(&command)));
-    out.extend_from_slice(rest);
+    if command == "install" {
+        out.extend(translate_yarn_install_args(rest));
+    } else {
+        out.extend_from_slice(rest);
+    }
     Plan {
         target: Target::Aube,
         args: out,
@@ -406,6 +430,51 @@ fn translate_global_package_args(args: &[OsString]) -> Vec<OsString> {
         i += 1;
     }
     packages
+}
+
+fn translate_omit_args(args: &[OsString]) -> Option<Vec<OsString>> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--omit" {
+            let value = args.get(i + 1)?.to_string_lossy();
+            push_omit_translation(&mut out, &value)?;
+            i += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--omit=") {
+            push_omit_translation(&mut out, value)?;
+            i += 1;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    Some(out)
+}
+
+fn push_omit_translation(out: &mut Vec<OsString>, value: &str) -> Option<()> {
+    for item in value.split(',') {
+        match item {
+            "dev" => out.push(OsString::from("--prod")),
+            "optional" => out.push(OsString::from("--no-optional")),
+            _ => return None,
+        }
+    }
+    Some(())
+}
+
+fn translate_yarn_install_args(args: &[OsString]) -> Vec<OsString> {
+    args.iter()
+        .map(|arg| {
+            if arg == "--ignore-optional" {
+                OsString::from("--no-optional")
+            } else {
+                arg.clone()
+            }
+        })
+        .collect()
 }
 
 fn is_global_marker(arg: &str) -> bool {
