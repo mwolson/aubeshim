@@ -239,4 +239,4 @@ Examples include `npm install -g prettier`, `pnpm add -g eslint`,
 ## Compatibility Notes
 
 Known package-manager interop findings that need later upstream reports are
-tracked in [ISSUES.md](ISSUES.md).
+tracked in [aube-issues](https://github.com/mwolson/tmp-aube-issues).
