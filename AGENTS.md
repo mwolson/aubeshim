@@ -80,9 +80,19 @@ Repro conventions:
 - Keep manifests as small as possible. Remove unrelated scripts, dev
   dependencies, tool config, app metadata, and private package names once the
   repro still triggers.
+- Reduce dependencies aggressively. Keep removing package dependencies until the
+  issue no longer reproduces, then keep the smallest dependency set that still
+  makes the problem happen. If the lockfile shape matters, prune unrelated
+  lockfile entries too while preserving the failing behavior.
 - Preserve only the lockfile state needed to show the problem. If the repro
   depends on an intentionally stale lockfile, document that in the README or
   script output.
+- For npm lockfile repros, make sure the pre-aube lockfile is a lockfile npm can
+  actually produce or accept. Avoid hand-pruning `package-lock.json` into a
+  state that makes aube fail but could not come from an npm workflow. Record the
+  npm version and exact command arguments used to produce or validate the
+  lockfile. If the current npm does not reproduce a real project's lock shape,
+  try relevant older npm versions before giving up on minimization.
 - Add or update the root README case list with the observed aube version for
   each issue, so later cases can be compared across releases.
 - Include a `repro.sh` for each case. Use `#!/bin/bash`, `set -euo pipefail`,
