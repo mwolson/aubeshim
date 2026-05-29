@@ -285,6 +285,14 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn npm_install_no_fund_with_packages_is_removed() {
+        let plan = plan_for(ShimTool::Npm, &os(&["install", "react", "--no-fund"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["add", "react"]);
+    }
+
+    #[test]
     fn npm_install_with_global_prefix_keeps_prefix_before_add() {
         let plan = plan_for(
             ShimTool::Npm,
