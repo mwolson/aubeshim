@@ -372,7 +372,7 @@ fn translate_npm_install_package_args(args: &[OsString]) -> Vec<OsString> {
         .filter_map(|arg| {
             let s = arg.to_string_lossy();
             match s.as_ref() {
-                "--save" | "--save-prod" => None,
+                "--save" | "--save-prod" | "--no-fund" => None,
                 _ => Some(arg.clone()),
             }
         })
