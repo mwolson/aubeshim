@@ -407,6 +407,58 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn npm_install_with_package_filters_progress_and_no_fund() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&[
+                "install",
+                "--no-fund",
+                "--progress=false",
+                "react",
+                "--",
+                "--no-fund",
+                "bar",
+            ]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["add", "react", "--", "--no-fund", "bar"]);
+    }
+
+    #[test]
+    fn npm_install_filters_separated_progress() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&["install", "--progress", "false"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn npm_ci_filters_progress_in_omit_translation() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&["ci", "--omit", "dev,optional", "--progress=false", "x"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["ci", "--prod", "--no-optional", "x"]);
+    }
+
+    #[test]
+    fn npm_ci_filters_separated_progress_in_omit_translation() {
+        let plan = plan_for(
+            ShimTool::Npm,
+            &os(&["ci", "--progress", "false", "--omit=dev"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["ci", "--prod"]);
+    }
+
+    #[test]
     fn npm_install_unsupported_omit_filter_uses_real_npm() {
         let plan = plan_for(ShimTool::Npm, &os(&["ci", "--omit=peer"]));
 
@@ -819,6 +871,10 @@ shim = ["~/devel/work/*"]
 
     #[test]
     fn zsh_activation_removes_existing_shim_entries_before_prepending() {
+        if !shell_available("zsh") {
+            return;
+        }
+
         let dir = Path::new("/tmp/aubeshim-test");
         let output = run_shell_activation(
             "zsh",
@@ -907,5 +963,12 @@ shim = ["~/devel/work/*"]
             .unwrap()
             .trim_end()
             .to_owned()
+    }
+
+    fn shell_available(shell: &str) -> bool {
+        std::process::Command::new(shell)
+            .arg("--version")
+            .output()
+            .is_ok()
     }
 }

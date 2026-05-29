@@ -368,15 +368,35 @@ fn has_json_marker(args: &[OsString]) -> bool {
 }
 
 fn translate_npm_install_package_args(args: &[OsString]) -> Vec<OsString> {
-    args.iter()
-        .filter_map(|arg| {
-            let s = arg.to_string_lossy();
-            match s.as_ref() {
-                "--save" | "--save-prod" | "--no-fund" | "--no-audit" => None,
-                _ => Some(arg.clone()),
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let s = args[i].to_string_lossy();
+        // if we hit the argument separator, pass the rest through
+        if s == "--" {
+            out.extend_from_slice(&args[i..]);
+            break;
+        }
+        if s == "--save" || s == "--save-prod" || s == "--no-fund" || s == "--no-audit" {
+            i += 1;
+            continue;
+        }
+        if s == "--progress" {
+            // skip the value that follows (e.g. `--progress false`)
+            i += 1;
+            if i < args.len() {
+                i += 1;
             }
-        })
-        .collect()
+            continue;
+        }
+        if s.starts_with("--progress=") {
+            i += 1;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    out
 }
 
 fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
@@ -437,6 +457,27 @@ fn translate_omit_args(args: &[OsString]) -> Option<Vec<OsString>> {
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].to_string_lossy();
+        // if we hit the argument separator, pass the rest through
+        if arg == "--" {
+            out.extend_from_slice(&args[i..]);
+            break;
+        }
+        if matches!(arg.as_ref(), "--no-fund" | "--no-audit") {
+            i += 1;
+            continue;
+        }
+        if arg == "--progress" {
+            // skip the value that follows (e.g. `--progress false`)
+            i += 1;
+            if i < args.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if arg.starts_with("--progress=") {
+            i += 1;
+            continue;
+        }
         if arg == "--omit" {
             let value = args.get(i + 1)?.to_string_lossy();
             push_omit_translation(&mut out, &value)?;
@@ -837,6 +878,7 @@ fn install_flag_takes_value(name: &str) -> bool {
             | "libc"
             | "loglevel"
             | "omit"
+            | "progress"
             | "os"
             | "prefix"
             | "registry"
