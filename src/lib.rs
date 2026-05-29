@@ -285,8 +285,8 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
-    fn npm_install_no_fund_with_packages_is_removed() {
-        let plan = plan_for(ShimTool::Npm, &os(&["install", "react", "--no-fund"]));
+    fn npm_install_with_packages_extra_args_is_removed() {
+        let plan = plan_for(ShimTool::Npm, &os(&["install", "react", "--no-fund", "--no-audit"]));
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["add", "react"]);
