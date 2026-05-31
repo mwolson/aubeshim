@@ -181,6 +181,10 @@ fn plan_bun(args: &[OsString]) -> Plan {
         };
     }
 
+    if command == "dlx" {
+        return plan_bun_dlx(prefix, rest);
+    }
+
     if has_global_marker(args) {
         if let Some(action) = bun_global_package_action(command) {
             return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
@@ -208,6 +212,116 @@ fn plan_bun(args: &[OsString]) -> Plan {
         target: Target::Aube,
         args: out,
     }
+}
+
+fn plan_bun_dlx(prefix: &[OsString], rest: &[OsString]) -> Plan {
+    let mut no_install = false;
+    let translated_prefix = translate_bun_dlx_prefix(prefix, &mut no_install);
+    let translated_rest = translate_bun_dlx_rest(rest, &mut no_install);
+
+    let mut out = Vec::with_capacity(translated_prefix.len() + translated_rest.for_dlx.len() + 3);
+    out.extend(translated_prefix);
+    if no_install {
+        out.push(OsString::from("exec"));
+        out.push(OsString::from("--no-install"));
+        out.extend(prepare_aube_exec_args(&translated_rest.for_exec));
+    } else {
+        out.push(OsString::from("dlx"));
+        out.extend(translated_rest.for_dlx);
+    }
+    Plan {
+        target: Target::Aube,
+        args: out,
+    }
+}
+
+fn translate_bun_dlx_prefix(args: &[OsString], no_install: &mut bool) -> Vec<OsString> {
+    args.iter()
+        .filter_map(|arg| {
+            let value = arg.to_string_lossy();
+            if is_bun_dlx_no_install_flag(&value) {
+                *no_install = true;
+                return None;
+            }
+            if is_bun_dlx_install_flag(&value) {
+                return None;
+            }
+            Some(arg.clone())
+        })
+        .collect()
+}
+
+struct TranslatedBunDlxRest {
+    for_dlx: Vec<OsString>,
+    for_exec: Vec<OsString>,
+}
+
+fn translate_bun_dlx_rest(args: &[OsString], no_install: &mut bool) -> TranslatedBunDlxRest {
+    let mut for_dlx = Vec::with_capacity(args.len());
+    let mut for_exec = Vec::with_capacity(args.len());
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--" {
+            for_dlx.extend_from_slice(&args[i..]);
+            for_exec.extend_from_slice(&args[i..]);
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            for_dlx.extend_from_slice(&args[i..]);
+            for_exec.extend_from_slice(&args[i..]);
+            break;
+        }
+        if is_bun_dlx_no_install_flag(&arg) {
+            *no_install = true;
+            i += 1;
+            continue;
+        }
+        if is_bun_dlx_install_flag(&arg) {
+            i += 1;
+            continue;
+        }
+        if arg == "--package" || arg == "-p" {
+            for_dlx.push(args[i].clone());
+            if let Some(value) = args.get(i + 1) {
+                for_dlx.push(value.clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if arg.starts_with("--package=") {
+            for_dlx.push(args[i].clone());
+            i += 1;
+            continue;
+        }
+
+        for_dlx.push(args[i].clone());
+        for_exec.push(args[i].clone());
+        i += 1;
+    }
+
+    TranslatedBunDlxRest { for_dlx, for_exec }
+}
+
+fn prepare_aube_exec_args(args: &[OsString]) -> Vec<OsString> {
+    let mut out = args.to_vec();
+    if let Some(command_idx) = command_index(&out) {
+        if command_idx + 1 < out.len() {
+            out.insert(command_idx + 1, OsString::from("--"));
+        }
+    }
+    out
+}
+
+fn is_bun_dlx_no_install_flag(arg: &str) -> bool {
+    arg == "--no-install"
+}
+
+fn is_bun_dlx_install_flag(arg: &str) -> bool {
+    arg == "-i" || arg.starts_with("--install=")
 }
 
 fn plan_yarn(args: &[OsString]) -> Plan {

@@ -565,6 +565,75 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn bun_x_strips_auto_install_flags_before_the_binary() {
+        for args in [
+            &["x", "--install=fallback", "electron-builder", "--linux"][..],
+            &["x", "--install=auto", "electron-builder", "--linux"][..],
+            &["x", "--install=force", "electron-builder", "--linux"][..],
+            &["x", "-i", "electron-builder", "--linux"][..],
+            &["--install=fallback", "x", "electron-builder", "--linux"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(
+                strings(&plan.args),
+                vec!["dlx", "electron-builder", "--linux"]
+            );
+        }
+    }
+
+    #[test]
+    fn bun_x_preserves_auto_install_flags_after_the_binary() {
+        for (args, expected) in [
+            (
+                &["x", "electron-builder", "--install=fallback"][..],
+                vec!["dlx", "electron-builder", "--install=fallback"],
+            ),
+            (
+                &["x", "electron-builder", "--no-install"][..],
+                vec!["dlx", "electron-builder", "--no-install"],
+            ),
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn bun_x_no_install_uses_aube_exec_without_package_selection() {
+        for args in [
+            &["x", "--no-install", "prettier", "--version"][..],
+            &["--no-install", "x", "prettier", "--version"][..],
+            &[
+                "x",
+                "--package",
+                "prettier",
+                "--no-install",
+                "prettier",
+                "--version",
+            ][..],
+            &[
+                "x",
+                "--package=prettier",
+                "--no-install",
+                "prettier",
+                "--version",
+            ][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(
+                strings(&plan.args),
+                vec!["exec", "--no-install", "prettier", "--", "--version"]
+            );
+        }
+    }
+
+    #[test]
     fn bun_global_package_operations_use_mise() {
         for (args, expected) in [
             (
