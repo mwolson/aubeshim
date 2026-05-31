@@ -146,6 +146,11 @@ the original package manager's response when compatibility is part of the claim.
 6. If the workflow fails, fix `main`, delete the failed local and remote tag,
    retag the fixed commit, and push the tag again.
 
-7. Review commits since the previous tag, update the draft release notes with
-   user-visible changes first and maintenance details afterward, then publish
-   the draft release.
+7. Review commits since the previous tag, update the draft release notes, then
+   publish the draft release. Start with a short summary, group related changes
+   under descriptive headings, and avoid a single generic `## Changes` section
+   when the release has multiple themes. Put user-visible changes first and
+   maintenance details afterward. Keep the "Full Changelog" link at the bottom
+   when GitHub generated one. Do not include routine verification sections or
+   lists of check commands in public release notes; report validation in the
+   chat handoff instead.
