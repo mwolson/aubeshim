@@ -20,6 +20,9 @@ organization behind aube and mise.
 - npm package edits are normalized to aube's command names:
   `npm install <package>` becomes `aube add <package>`, and
   `npm uninstall <package>` becomes `aube remove <package>`.
+- npm-shimmed `aube` commands set `AUBE_NODE_LINKER=hoisted` for that invocation
+  unless a node-linker env var is already set. This matches npm's hoisted
+  `node_modules` shape without writing `.npmrc`.
 - `pnpm` commands pass through to `aube`, since aube already presents a
   pnpm-compatible command surface.
 - `yarn` routes common package-manager commands and script names to `aube`;

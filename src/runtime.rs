@@ -16,13 +16,13 @@ pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
         let status = if should_runtime_shim()? {
             run_version(tool, args)?
         } else {
-            run_plan(real_plan_for(tool, args))?
+            run_plan(None, real_plan_for(tool, args))?
         };
         std::process::exit(exit_code(status));
     }
 
     let plan = runtime_plan_for(tool, args)?;
-    let status = run_plan(plan)?;
+    let status = run_plan(Some(tool), plan)?;
     std::process::exit(exit_code(status));
 }
 
@@ -81,7 +81,7 @@ fn real_target_for(tool: ShimTool) -> Target {
     }
 }
 
-fn run_plan(plan: Plan) -> Result<ExitStatus> {
+fn run_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
     let program = resolve_target(plan.target)?;
     let mut cmd = ProcessCommand::new(&program);
     cmd.args(&plan.args);
@@ -92,8 +92,33 @@ fn run_plan(plan: Plan) -> Result<ExitStatus> {
         }
     }
 
+    if let Some(tool) = tool {
+        if let Some((key, value)) =
+            npm_compat_node_linker_env(tool, plan.target, node_linker_env_is_set())
+        {
+            cmd.env(key, value);
+        }
+    }
+
     cmd.status()
         .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
+}
+
+pub(crate) fn npm_compat_node_linker_env(
+    tool: ShimTool,
+    target: Target,
+    explicit_node_linker_env: bool,
+) -> Option<(&'static str, &'static str)> {
+    if tool == ShimTool::Npm && target == Target::Aube && !explicit_node_linker_env {
+        return Some(("AUBE_NODE_LINKER", "hoisted"));
+    }
+    None
+}
+
+fn node_linker_env_is_set() -> bool {
+    env::var_os("AUBE_NODE_LINKER").is_some()
+        || env::var_os("NPM_CONFIG_NODE_LINKER").is_some()
+        || env::var_os("npm_config_node_linker").is_some()
 }
 
 fn resolve_target(target: Target) -> Result<OsString> {

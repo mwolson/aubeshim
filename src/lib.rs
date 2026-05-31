@@ -29,7 +29,7 @@ mod tests {
     use crate::config::parse_config;
     use crate::runtime::{
         compare_dotted_versions, mise_version_from_output, missing_tool_error,
-        unsupported_mise_error, version_from_output,
+        npm_compat_node_linker_env, unsupported_mise_error, version_from_output,
     };
     use std::{cmp::Ordering, ffi::OsString, fs, path::Path};
 
@@ -396,6 +396,61 @@ shim = ["~/devel/work/*"]
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["ci", "--no-optional", "--prod"]);
+    }
+
+    #[test]
+    fn npm_install_hoisted_strategy_uses_aube() {
+        for (args, expected) in [
+            (&["ci", "--install-strategy=hoisted"][..], vec!["ci"]),
+            (
+                &["install", "--install-strategy", "hoisted"][..],
+                vec!["install"],
+            ),
+            (
+                &["install", "--install-strategy=hoisted", "react"][..],
+                vec!["add", "react"],
+            ),
+        ] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn npm_install_unsupported_layout_strategy_uses_real_npm() {
+        for args in [
+            &["ci", "--install-strategy=nested"][..],
+            &["install", "--install-strategy", "shallow"][..],
+            &["install", "--legacy-bundling"][..],
+            &["install", "--global-style=true", "react"][..],
+        ] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_aube_plans_default_to_hoisted_node_linker() {
+        assert_eq!(
+            npm_compat_node_linker_env(ShimTool::Npm, Target::Aube, false),
+            Some(("AUBE_NODE_LINKER", "hoisted"))
+        );
+        assert_eq!(
+            npm_compat_node_linker_env(ShimTool::Npm, Target::Aube, true),
+            None
+        );
+        assert_eq!(
+            npm_compat_node_linker_env(ShimTool::Pnpm, Target::Aube, false),
+            None
+        );
+        assert_eq!(
+            npm_compat_node_linker_env(ShimTool::Npm, Target::RealNpm, false),
+            None
+        );
     }
 
     #[test]

@@ -99,10 +99,16 @@ fn plan_npm(args: &[OsString]) -> Plan {
     }
 
     if matches!(command.as_str(), "install" | "i" | "in") && install_has_packages(rest) {
+        let Some(translated_rest) = translate_npm_install_package_args(rest) else {
+            return Plan {
+                target: Target::RealNpm,
+                args: args.to_vec(),
+            };
+        };
         let mut out = Vec::with_capacity(args.len());
         out.extend_from_slice(prefix);
         out.push(OsString::from("add"));
-        out.extend(translate_npm_install_package_args(rest));
+        out.extend(translated_rest);
         return Plan {
             target: Target::Aube,
             args: out,
@@ -113,7 +119,7 @@ fn plan_npm(args: &[OsString]) -> Plan {
     out.extend_from_slice(prefix);
     out.push(OsString::from(normalize_npm_command(&command)));
     if matches!(command.as_str(), "ci" | "install" | "i" | "in") {
-        let Some(translated) = translate_omit_args(rest) else {
+        let Some(translated) = translate_npm_project_install_args(rest) else {
             return Plan {
                 target: Target::RealNpm,
                 args: args.to_vec(),
@@ -481,16 +487,96 @@ fn has_json_marker(args: &[OsString]) -> bool {
     })
 }
 
-fn translate_npm_install_package_args(args: &[OsString]) -> Vec<OsString> {
-    args.iter()
-        .filter_map(|arg| {
-            let s = arg.to_string_lossy();
-            match s.as_ref() {
-                "--save" | "--save-prod" => None,
-                _ => Some(arg.clone()),
+fn translate_npm_install_package_args(args: &[OsString]) -> Option<Vec<OsString>> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--" {
+            out.extend_from_slice(&args[i..]);
+            break;
+        }
+        if skip_npm_install_layout_arg(args, &mut i)? {
+            continue;
+        }
+
+        let arg = args[i].to_string_lossy();
+        match arg.as_ref() {
+            "--save" | "--save-prod" => {}
+            _ => out.push(args[i].clone()),
+        }
+        i += 1;
+    }
+    Some(out)
+}
+
+fn translate_npm_project_install_args(args: &[OsString]) -> Option<Vec<OsString>> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--" {
+            out.extend_from_slice(&args[i..]);
+            break;
+        }
+        if skip_npm_install_layout_arg(args, &mut i)? {
+            continue;
+        }
+
+        let arg = args[i].to_string_lossy();
+        if arg == "--omit" {
+            let value = args.get(i + 1)?.to_string_lossy();
+            push_omit_translation(&mut out, &value)?;
+            i += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--omit=") {
+            push_omit_translation(&mut out, value)?;
+            i += 1;
+            continue;
+        }
+
+        out.push(args[i].clone());
+        i += 1;
+    }
+    Some(out)
+}
+
+fn skip_npm_install_layout_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
+    let arg = args[*i].to_string_lossy();
+    if arg == "--install-strategy" {
+        let value = args.get(*i + 1)?.to_string_lossy();
+        if value == "hoisted" {
+            *i += 2;
+            return Some(true);
+        }
+        return None;
+    }
+    if let Some(value) = arg.strip_prefix("--install-strategy=") {
+        if value == "hoisted" {
+            *i += 1;
+            return Some(true);
+        }
+        return None;
+    }
+
+    if arg == "--legacy-bundling" || arg == "--global-style" {
+        return None;
+    }
+    if arg == "--no-legacy-bundling" || arg == "--no-global-style" {
+        *i += 1;
+        return Some(true);
+    }
+
+    for name in ["legacy-bundling", "global-style"] {
+        if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
+            if value.eq_ignore_ascii_case("false") {
+                *i += 1;
+                return Some(true);
             }
-        })
-        .collect()
+            return None;
+        }
+    }
+
+    Some(false)
 }
 
 fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
