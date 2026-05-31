@@ -380,6 +380,29 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn npm_list_with_npm_specific_output_flags_uses_real_npm() {
+        for args in [
+            &["list", "-a", "--include", "prod", "--omit", "dev", "--json"][..],
+            &["ls", "--all", "--long"][..],
+            &["--json", "list"][..],
+            &["list", "--parseable"][..],
+        ] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn plain_npm_list_still_uses_aube() {
+        let plan = plan_for(ShimTool::Npm, &os(&["list", "--depth", "Infinity"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["list", "--depth", "Infinity"]);
+    }
+
+    #[test]
     fn npm_install_with_workspace_value_does_not_treat_value_as_package() {
         let plan = plan_for(ShimTool::Npm, &os(&["install", "--workspace", "app"]));
 

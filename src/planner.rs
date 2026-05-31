@@ -85,6 +85,13 @@ fn plan_npm(args: &[OsString]) -> Plan {
         };
     }
 
+    if matches!(command.as_str(), "list" | "ls") && npm_list_requires_real_npm(args) {
+        return Plan {
+            target: Target::RealNpm,
+            args: args.to_vec(),
+        };
+    }
+
     if command == "outdated" && has_global_marker(args) {
         return plan_mise_global_outdated(rest);
     }
@@ -701,6 +708,23 @@ fn npm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
 
 fn npm_json_metadata_command(command: &str) -> bool {
     matches!(command, "info" | "show" | "view")
+}
+
+fn npm_list_requires_real_npm(args: &[OsString]) -> bool {
+    args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        if arg == "-a" {
+            return true;
+        }
+        if !arg.starts_with("--") {
+            return false;
+        }
+
+        matches!(
+            long_flag_name(&arg),
+            "all" | "include" | "json" | "long" | "omit" | "parseable"
+        )
+    })
 }
 
 fn pnpm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
