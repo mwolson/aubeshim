@@ -411,6 +411,40 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn npm_install_drops_cache_audit_and_fund_options() {
+        for (args, expected) in [
+            (
+                &["--cache", "/tmp/npm-cache", "--no-audit", "--no-fund", "ci"][..],
+                vec!["ci"],
+            ),
+            (
+                &[
+                    "ci",
+                    "--cache=/tmp/npm-cache",
+                    "--audit=false",
+                    "--fund=false",
+                ][..],
+                vec!["ci"],
+            ),
+            (
+                &[
+                    "--cache",
+                    "/tmp/npm-cache",
+                    "install",
+                    "react",
+                    "--no-audit",
+                ][..],
+                vec!["add", "react"],
+            ),
+        ] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
     fn npm_install_omit_filters_use_aube_equivalents() {
         let plan = plan_for(
             ShimTool::Npm,

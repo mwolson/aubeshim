@@ -51,6 +51,12 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
     }
 
     if matches!(command.as_str(), "install" | "i" | "in") && install_has_packages(rest) {
+        let Some(translated_prefix) = translate_project_install_args(prefix) else {
+            return Plan {
+                target: Target::RealNpm,
+                args: args.to_vec(),
+            };
+        };
         let Some(translated_rest) = translate_install_package_args(rest) else {
             return Plan {
                 target: Target::RealNpm,
@@ -58,7 +64,7 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
             };
         };
         let mut out = Vec::with_capacity(args.len());
-        out.extend_from_slice(prefix);
+        out.extend(translated_prefix);
         out.push(OsString::from("add"));
         out.extend(translated_rest);
         return Plan {
@@ -68,7 +74,20 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
     }
 
     let mut out = Vec::with_capacity(args.len());
-    out.extend_from_slice(prefix);
+    let translated_prefix = if matches!(command.as_str(), "ci" | "install" | "i" | "in") {
+        match translate_project_install_args(prefix) {
+            Some(translated) => translated,
+            None => {
+                return Plan {
+                    target: Target::RealNpm,
+                    args: args.to_vec(),
+                };
+            }
+        }
+    } else {
+        prefix.to_vec()
+    };
+    out.extend(translated_prefix);
     out.push(OsString::from(normalize_command(&command)));
     if matches!(command.as_str(), "ci" | "install" | "i" | "in") {
         let Some(translated) = translate_project_install_args(rest) else {
@@ -134,6 +153,9 @@ fn translate_install_package_args(args: &[OsString]) -> Option<Vec<OsString>> {
         if skip_install_layout_arg(args, &mut i)? {
             continue;
         }
+        if skip_install_noop_arg(args, &mut i)? {
+            continue;
+        }
 
         let arg = args[i].to_string_lossy();
         match arg.as_ref() {
@@ -154,6 +176,9 @@ fn translate_project_install_args(args: &[OsString]) -> Option<Vec<OsString>> {
             break;
         }
         if skip_install_layout_arg(args, &mut i)? {
+            continue;
+        }
+        if skip_install_noop_arg(args, &mut i)? {
             continue;
         }
 
@@ -203,6 +228,35 @@ fn skip_install_layout_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
     }
 
     for name in ["legacy-bundling", "global-style"] {
+        if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
+            if value.eq_ignore_ascii_case("false") {
+                *i += 1;
+                return Some(true);
+            }
+            return None;
+        }
+    }
+
+    Some(false)
+}
+
+fn skip_install_noop_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
+    let arg = args[*i].to_string_lossy();
+    if arg == "--cache" {
+        args.get(*i + 1)?;
+        *i += 2;
+        return Some(true);
+    }
+    if arg.starts_with("--cache=") {
+        *i += 1;
+        return Some(true);
+    }
+
+    if arg == "--no-audit" || arg == "--no-fund" {
+        *i += 1;
+        return Some(true);
+    }
+    for name in ["audit", "fund"] {
         if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
             if value.eq_ignore_ascii_case("false") {
                 *i += 1;
