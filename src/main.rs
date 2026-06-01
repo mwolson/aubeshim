@@ -1,5 +1,5 @@
 use anyhow::Result;
-use aubeshim::{Cli, Invocation, Shell};
+use aubeshim::{Cli, Invocation};
 use clap::{CommandFactory, Parser};
 use std::ffi::OsString;
 
@@ -32,8 +32,14 @@ fn dispatch(cli: Cli) -> Result<()> {
                 println!("installed {}", path.display());
             }
             println!();
-            println!("Add this after mise activation in your shell startup:");
-            print!("{}", aubeshim::shell_init(Shell::Zsh, &dir));
+            println!(
+                "Add aubeshim activation after mise or any other tool manager in your shell startup:"
+            );
+            println!();
+            println!("  zsh:  eval \"$(aubeshim activate zsh)\"");
+            println!("  bash: eval \"$(aubeshim activate bash)\"");
+            println!("  fish: aubeshim activate fish | source");
+            println!("  sh:   eval \"$(aubeshim activate sh)\"");
             Ok(())
         }
         Some(aubeshim::Command::Uninstall { shim_dir }) => {
