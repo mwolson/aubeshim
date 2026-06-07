@@ -1,6 +1,7 @@
 use super::{
     command_index, has_global_marker, long_flag_name, plan_mise_global_outdated,
-    plan_mise_global_package_action, translate_omit_args, GlobalPackageAction, Plan, Target,
+    plan_mise_global_package_action, prepare_exec_args, translate_omit_args, GlobalPackageAction,
+    Plan, Target,
 };
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -35,6 +36,12 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
     }
 
     if command == "dlx" {
+        if bun_dlx_uses_real_bun(prefix, rest) {
+            return Plan {
+                target: Target::RealBun,
+                args: args.to_vec(),
+            };
+        }
         return plan_dlx(prefix, rest);
     }
 
@@ -65,6 +72,17 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
         target: Target::Aube,
         args: out,
     }
+}
+
+pub(super) fn plan_bunx(args: &[OsString]) -> Plan {
+    if bun_dlx_uses_real_bun(&[], args) {
+        return Plan {
+            target: Target::RealBunx,
+            args: args.to_vec(),
+        };
+    }
+
+    plan_dlx(&[], args)
 }
 
 fn plan_dlx(prefix: &[OsString], rest: &[OsString]) -> Plan {
@@ -160,13 +178,44 @@ fn translate_dlx_rest(args: &[OsString], no_install: &mut bool) -> TranslatedDlx
 }
 
 fn prepare_aube_exec_args(args: &[OsString]) -> Vec<OsString> {
-    let mut out = args.to_vec();
-    if let Some(command_idx) = command_index(&out) {
-        if command_idx + 1 < out.len() {
-            out.insert(command_idx + 1, OsString::from("--"));
+    prepare_exec_args(args)
+}
+
+fn bun_dlx_uses_real_bun(prefix: &[OsString], rest: &[OsString]) -> bool {
+    if prefix.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        is_bun_dlx_runtime_flag(&arg)
+    }) {
+        return true;
+    }
+
+    let mut i = 0;
+    while i < rest.len() {
+        let arg = rest[i].to_string_lossy();
+        if arg == "--" {
+            return false;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            return false;
+        }
+        if is_bun_dlx_runtime_flag(&arg) {
+            return true;
+        }
+        if bun_dlx_flag_takes_value(&arg) && !arg.contains('=') {
+            i += 2;
+        } else {
+            i += 1;
         }
     }
-    out
+    false
+}
+
+fn is_bun_dlx_runtime_flag(arg: &str) -> bool {
+    arg == "--bun" || arg == "-b"
+}
+
+fn bun_dlx_flag_takes_value(arg: &str) -> bool {
+    arg == "-p" || matches!(long_flag_name(arg), "package")
 }
 
 fn is_dlx_no_install_flag(arg: &str) -> bool {

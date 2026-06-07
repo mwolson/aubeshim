@@ -1,12 +1,20 @@
 use super::{
-    command_index, has_global_marker, plan_mise_global_outdated, plan_mise_global_package_action,
-    GlobalPackageAction, Plan, Target,
+    command_index, dlx, has_global_marker, plan_mise_global_outdated,
+    plan_mise_global_package_action, GlobalPackageAction, Plan, Target,
 };
 use std::ffi::OsString;
 
 pub(super) fn plan(args: &[OsString]) -> Plan {
     if let Some(command_idx) = command_index(args) {
         let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+        if command == "dlx" {
+            return dlx::plan_pnpm_dlx_with_prefix(
+                &args[..command_idx],
+                &args[command_idx + 1..],
+                Target::RealPnpm,
+                args,
+            );
+        }
         if command == "outdated" && has_global_marker(args) {
             return plan_mise_global_outdated(&args[command_idx + 1..]);
         }

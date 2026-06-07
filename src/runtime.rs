@@ -75,8 +75,12 @@ fn real_plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
 fn real_target_for(tool: ShimTool) -> Target {
     match tool {
         ShimTool::Bun => Target::RealBun,
+        ShimTool::Bunx => Target::RealBunx,
         ShimTool::Npm => Target::RealNpm,
+        ShimTool::Npx => Target::RealNpx,
         ShimTool::Pnpm => Target::RealPnpm,
+        ShimTool::Pnpx => Target::RealPnpx,
+        ShimTool::Pnx => Target::RealPnx,
         ShimTool::Yarn => Target::RealYarn,
     }
 }
@@ -128,11 +132,21 @@ fn resolve_target(target: Target) -> Result<OsString> {
         Target::RealBun => {
             resolve_real_bun()?.ok_or_else(|| missing_tool_error("real bun", "AUBESHIM_REAL_BUN"))
         }
+        Target::RealBunx => resolve_real_bunx()?
+            .ok_or_else(|| missing_tool_error("real bunx", "AUBESHIM_REAL_BUNX")),
         Target::RealNpm => {
             resolve_real_npm()?.ok_or_else(|| missing_tool_error("real npm", "AUBESHIM_REAL_NPM"))
         }
+        Target::RealNpx => {
+            resolve_real_npx()?.ok_or_else(|| missing_tool_error("real npx", "AUBESHIM_REAL_NPX"))
+        }
         Target::RealPnpm => resolve_real_pnpm()?
             .ok_or_else(|| missing_tool_error("real pnpm", "AUBESHIM_REAL_PNPM")),
+        Target::RealPnpx => resolve_real_pnpx()?
+            .ok_or_else(|| missing_tool_error("real pnpx", "AUBESHIM_REAL_PNPX")),
+        Target::RealPnx => {
+            resolve_real_pnx()?.ok_or_else(|| missing_tool_error("real pnx", "AUBESHIM_REAL_PNX"))
+        }
         Target::RealYarn => resolve_real_yarn()?
             .ok_or_else(|| missing_tool_error("real yarn", "AUBESHIM_REAL_YARN")),
     }
@@ -143,11 +157,21 @@ fn resolve_real_tool(tool: ShimTool) -> Result<OsString> {
         ShimTool::Bun => {
             resolve_real_bun()?.ok_or_else(|| missing_tool_error("real bun", "AUBESHIM_REAL_BUN"))
         }
+        ShimTool::Bunx => resolve_real_bunx()?
+            .ok_or_else(|| missing_tool_error("real bunx", "AUBESHIM_REAL_BUNX")),
         ShimTool::Npm => {
             resolve_real_npm()?.ok_or_else(|| missing_tool_error("real npm", "AUBESHIM_REAL_NPM"))
         }
+        ShimTool::Npx => {
+            resolve_real_npx()?.ok_or_else(|| missing_tool_error("real npx", "AUBESHIM_REAL_NPX"))
+        }
         ShimTool::Pnpm => resolve_real_pnpm()?
             .ok_or_else(|| missing_tool_error("real pnpm", "AUBESHIM_REAL_PNPM")),
+        ShimTool::Pnpx => resolve_real_pnpx()?
+            .ok_or_else(|| missing_tool_error("real pnpx", "AUBESHIM_REAL_PNPX")),
+        ShimTool::Pnx => {
+            resolve_real_pnx()?.ok_or_else(|| missing_tool_error("real pnx", "AUBESHIM_REAL_PNX"))
+        }
         ShimTool::Yarn => resolve_real_yarn()?
             .ok_or_else(|| missing_tool_error("real yarn", "AUBESHIM_REAL_YARN")),
     }
@@ -189,12 +213,28 @@ fn resolve_real_bun() -> Result<Option<OsString>> {
     resolve_tool("bun", "AUBESHIM_REAL_BUN", path_which_excluding_shims)
 }
 
+fn resolve_real_bunx() -> Result<Option<OsString>> {
+    resolve_tool("bunx", "AUBESHIM_REAL_BUNX", path_which_excluding_shims)
+}
+
 fn resolve_real_npm() -> Result<Option<OsString>> {
     resolve_tool("npm", "AUBESHIM_REAL_NPM", path_which_excluding_shims)
 }
 
+fn resolve_real_npx() -> Result<Option<OsString>> {
+    resolve_tool("npx", "AUBESHIM_REAL_NPX", path_which_excluding_shims)
+}
+
 fn resolve_real_pnpm() -> Result<Option<OsString>> {
     resolve_tool("pnpm", "AUBESHIM_REAL_PNPM", path_which_excluding_shims)
+}
+
+fn resolve_real_pnpx() -> Result<Option<OsString>> {
+    resolve_tool("pnpx", "AUBESHIM_REAL_PNPX", path_which_excluding_shims)
+}
+
+fn resolve_real_pnx() -> Result<Option<OsString>> {
+    resolve_tool("pnx", "AUBESHIM_REAL_PNX", path_which_excluding_shims)
 }
 
 fn resolve_real_yarn() -> Result<Option<OsString>> {

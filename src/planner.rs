@@ -1,4 +1,5 @@
 mod bun;
+mod dlx;
 mod npm;
 mod pnpm;
 mod yarn;
@@ -21,8 +22,12 @@ pub enum Target {
     Aube,
     Mise,
     RealBun,
+    RealBunx,
     RealNpm,
+    RealNpx,
     RealPnpm,
+    RealPnpx,
+    RealPnx,
     RealYarn,
 }
 
@@ -35,8 +40,12 @@ enum GlobalPackageAction {
 pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
     match tool {
         ShimTool::Bun => bun::plan(args),
+        ShimTool::Bunx => bun::plan_bunx(args),
         ShimTool::Npm => npm::plan(args),
+        ShimTool::Npx => dlx::plan_npx(args),
         ShimTool::Pnpm => pnpm::plan(args),
+        ShimTool::Pnpx => dlx::plan_pnpm_dlx(args, Target::RealPnpx),
+        ShimTool::Pnx => dlx::plan_pnpm_dlx(args, Target::RealPnx),
         ShimTool::Yarn => yarn::plan(args),
     }
 }
@@ -60,8 +69,12 @@ pub fn plan_for_config(
 fn real_target_for(tool: ShimTool) -> Target {
     match tool {
         ShimTool::Bun => Target::RealBun,
+        ShimTool::Bunx => Target::RealBunx,
         ShimTool::Npm => Target::RealNpm,
+        ShimTool::Npx => Target::RealNpx,
         ShimTool::Pnpm => Target::RealPnpm,
+        ShimTool::Pnpx => Target::RealPnpx,
+        ShimTool::Pnx => Target::RealPnx,
         ShimTool::Yarn => Target::RealYarn,
     }
 }
@@ -209,6 +222,16 @@ fn translate_omit_args(args: &[OsString]) -> Option<Vec<OsString>> {
         i += 1;
     }
     Some(out)
+}
+
+fn prepare_exec_args(args: &[OsString]) -> Vec<OsString> {
+    let mut out = args.to_vec();
+    if let Some(command_idx) = command_index(&out) {
+        if command_idx + 1 < out.len() {
+            out.insert(command_idx + 1, OsString::from("--"));
+        }
+    }
+    out
 }
 
 fn push_omit_translation(out: &mut Vec<OsString>, value: &str) -> Option<()> {

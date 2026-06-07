@@ -5,7 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SHIM_NAMES: &[&str] = &["bun", "npm", "pnpm", "yarn"];
+const SHIM_NAMES: &[&str] = &["bun", "bunx", "npm", "npx", "pnpm", "pnpx", "pnx", "yarn"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Invocation {
@@ -16,8 +16,12 @@ pub enum Invocation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShimTool {
     Bun,
+    Bunx,
     Npm,
+    Npx,
     Pnpm,
+    Pnpx,
+    Pnx,
     Yarn,
 }
 
@@ -32,8 +36,12 @@ pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
         .to_ascii_lowercase();
     match stem.as_str() {
         "bun" => Invocation::Shim(ShimTool::Bun),
+        "bunx" => Invocation::Shim(ShimTool::Bunx),
         "npm" => Invocation::Shim(ShimTool::Npm),
+        "npx" => Invocation::Shim(ShimTool::Npx),
         "pnpm" => Invocation::Shim(ShimTool::Pnpm),
+        "pnpx" => Invocation::Shim(ShimTool::Pnpx),
+        "pnx" => Invocation::Shim(ShimTool::Pnx),
         "yarn" => Invocation::Shim(ShimTool::Yarn),
         _ => Invocation::Manager,
     }

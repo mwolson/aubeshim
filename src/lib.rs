@@ -269,6 +269,21 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn recognizes_standalone_exec_shims() {
+        for (name, tool) in [
+            ("bunx", ShimTool::Bunx),
+            ("npx", ShimTool::Npx),
+            ("pnpx", ShimTool::Pnpx),
+            ("pnx", ShimTool::Pnx),
+        ] {
+            assert_eq!(
+                invocation_from_argv0(Some(&OsString::from(name))),
+                Invocation::Shim(tool)
+            );
+        }
+    }
+
+    #[test]
     fn npm_install_without_packages_uses_aube_install() {
         let plan = plan_for(ShimTool::Npm, &os(&["install"]));
 
@@ -564,6 +579,30 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn pnpm_dlx_uses_aube_dlx_with_supported_flags() {
+        let plan = plan_for(ShimTool::Pnpm, &os(&["dlx", "-s", "vite", "--version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["dlx", "--silent", "vite", "--version"]
+        );
+    }
+
+    #[test]
+    fn pnpm_dlx_allow_build_uses_real_pnpm_until_aube_supports_it() {
+        for args in [
+            &["dlx", "--allow-build=esbuild", "vite"][..],
+            &["dlx", "--allow-build", "esbuild", "vite"][..],
+        ] {
+            let plan = plan_for(ShimTool::Pnpm, &os(args));
+
+            assert_eq!(plan.target, Target::RealPnpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
     fn pnpm_global_package_operations_use_mise() {
         for (args, expected) in [
             (
@@ -746,6 +785,56 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
+    fn bun_x_bun_runtime_flag_uses_real_bun() {
+        for args in [
+            &["x", "--bun", "vite", "dev"][..],
+            &["--bun", "x", "vite", "dev"][..],
+            &["x", "-p", "vite", "--bun", "vite", "dev"][..],
+        ] {
+            let plan = plan_for(ShimTool::Bun, &os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bunx_uses_aube_dlx() {
+        let plan = plan_for(
+            ShimTool::Bunx,
+            &os(&["--package", "@angular/cli", "ng", "new", "app"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["dlx", "--package", "@angular/cli", "ng", "new", "app"]
+        );
+    }
+
+    #[test]
+    fn bunx_no_install_uses_aube_exec() {
+        let plan = plan_for(
+            ShimTool::Bunx,
+            &os(&["--no-install", "prettier", "--version"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["exec", "--no-install", "prettier", "--", "--version"]
+        );
+    }
+
+    #[test]
+    fn bunx_bun_runtime_flag_uses_real_bunx() {
+        let plan = plan_for(ShimTool::Bunx, &os(&["--bun", "vite", "dev"]));
+
+        assert_eq!(plan.target, Target::RealBunx);
+        assert_eq!(strings(&plan.args), vec!["--bun", "vite", "dev"]);
+    }
+
+    #[test]
     fn bun_global_package_operations_use_mise() {
         for (args, expected) in [
             (
@@ -870,6 +959,86 @@ shim = ["~/devel/work/*"]
 
         assert_eq!(plan.target, Target::RealYarn);
         assert_eq!(strings(&plan.args), vec!["plugin", "list"]);
+    }
+
+    #[test]
+    fn npx_uses_aube_dlx() {
+        let plan = plan_for(ShimTool::Npx, &os(&["--yes", "-s", "create-vite", "app"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["dlx", "--silent", "create-vite", "app"]
+        );
+    }
+
+    #[test]
+    fn npx_package_and_call_flags_use_aube_dlx() {
+        let package = plan_for(
+            ShimTool::Npx,
+            &os(&["--package", "typescript", "tsc", "--version"]),
+        );
+        let call = plan_for(ShimTool::Npx, &os(&["--call", "eslint && tsc"]));
+
+        assert_eq!(package.target, Target::Aube);
+        assert_eq!(
+            strings(&package.args),
+            vec!["dlx", "--package", "typescript", "tsc", "--version"]
+        );
+        assert_eq!(call.target, Target::Aube);
+        assert_eq!(strings(&call.args), vec!["dlx", "-c", "eslint && tsc"]);
+    }
+
+    #[test]
+    fn npx_no_install_uses_aube_exec() {
+        let plan = plan_for(
+            ShimTool::Npx,
+            &os(&["--no-install", "prettier", "--version"]),
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["exec", "--no-install", "prettier", "--", "--version"]
+        );
+    }
+
+    #[test]
+    fn npx_workspace_flags_use_real_npx() {
+        for args in [
+            &["--workspace", "app", "eslint"][..],
+            &["--workspaces", "eslint"][..],
+            &["--include-workspace-root", "eslint"][..],
+        ] {
+            let plan = plan_for(ShimTool::Npx, &os(args));
+
+            assert_eq!(plan.target, Target::RealNpx);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn pnx_and_pnpx_use_aube_dlx() {
+        for tool in [ShimTool::Pnx, ShimTool::Pnpx] {
+            let plan = plan_for(tool, &os(&["-s", "vite", "--version"]));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(
+                strings(&plan.args),
+                vec!["dlx", "--silent", "vite", "--version"]
+            );
+        }
+    }
+
+    #[test]
+    fn pnx_and_pnpx_allow_build_use_real_tools_until_aube_supports_it() {
+        let pnx = plan_for(ShimTool::Pnx, &os(&["--allow-build=esbuild", "vite"]));
+        let pnpx = plan_for(ShimTool::Pnpx, &os(&["--allow-build=esbuild", "vite"]));
+
+        assert_eq!(pnx.target, Target::RealPnx);
+        assert_eq!(strings(&pnx.args), vec!["--allow-build=esbuild", "vite"]);
+        assert_eq!(pnpx.target, Target::RealPnpx);
+        assert_eq!(strings(&pnpx.args), vec!["--allow-build=esbuild", "vite"]);
     }
 
     #[test]
@@ -1008,19 +1177,18 @@ shim = ["~/devel/work/*"]
     fn install_and_uninstall_shims() {
         let dir = tempfile::tempdir().unwrap();
         let installed = install_shims(dir.path(), false).unwrap();
+        let shim_names = ["bun", "bunx", "npm", "npx", "pnpm", "pnpx", "pnx", "yarn"];
 
-        assert_eq!(installed.len(), 4);
-        assert!(dir.path().join("bun").is_symlink());
-        assert!(dir.path().join("npm").is_symlink());
-        assert!(dir.path().join("pnpm").is_symlink());
-        assert!(dir.path().join("yarn").is_symlink());
+        assert_eq!(installed.len(), shim_names.len());
+        for name in shim_names {
+            assert!(dir.path().join(name).is_symlink());
+        }
 
         let removed = uninstall_shims(dir.path()).unwrap();
-        assert_eq!(removed.len(), 4);
-        assert!(!dir.path().join("bun").exists());
-        assert!(!dir.path().join("npm").exists());
-        assert!(!dir.path().join("pnpm").exists());
-        assert!(!dir.path().join("yarn").exists());
+        assert_eq!(removed.len(), shim_names.len());
+        for name in shim_names {
+            assert!(!dir.path().join(name).exists());
+        }
     }
 
     struct RepoFixture {

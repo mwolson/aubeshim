@@ -32,7 +32,7 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         shim_dir: Option<PathBuf>,
     },
-    /// Remove bun, npm, pnpm, and yarn shims
+    /// Remove package-manager shims
     Uninstall {
         /// Directory where package-manager shims were installed
         #[arg(long, value_name = "DIR")]
