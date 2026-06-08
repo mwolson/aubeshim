@@ -1,8 +1,8 @@
 # aubeshim
 
-`aubeshim` installs PATH shims that let existing `bun`, `npm`, `pnpm`, and
-`yarn` commands use [aube](https://aube.en.dev) when the command shape is
-compatible.
+`aubeshim` installs PATH shims that let existing `bun`, `bunx`, `npm`, `npx`,
+`pnpm`, `pnpx`, `pnx`, and `yarn` commands use [aube](https://aube.en.dev) when
+the command shape is compatible.
 
 The goal is to get aube's fast installs, strict layout, and run-time
 auto-install checks without editing each project's scripts.
@@ -30,6 +30,13 @@ organization behind aube and mise.
 - `bun` routes package-manager commands such as `bun install`, `bun add`, and
   `bun run` to `aube`; runtime commands and unknown commands fall back to the
   real Bun binary.
+- One-off runner shims route compatible commands to `aube dlx`. That includes
+  `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
+- One-off runner no-install modes use `aube exec --no-install`. That includes
+  `bunx --no-install`, `bun dlx --no-install`, and `npx --no-install`.
+- Runner flags that need exact package-manager behavior fall back to the real
+  tool. Examples include `bunx --bun`, `npx --workspace`, and
+  `pnpx --allow-build`.
 - `--version` and `-v` print the real package manager version. In repos where
   aubeshim is configured to shim, they also print the aubeshim and aube versions
   in a parenthesized hint.
@@ -62,8 +69,9 @@ cargo install aubeshim
 aubeshim install --force
 ```
 
-That installs the `aubeshim` binary with Cargo and creates `bun`, `npm`, `pnpm`,
-and `yarn` shims in `~/.local/share/aubeshim/shims`.
+That installs the `aubeshim` binary with Cargo and creates `bun`, `bunx`, `npm`,
+`npx`, `pnpm`, `pnpx`, `pnx`, and `yarn` shims in
+`~/.local/share/aubeshim/shims`.
 
 From a source checkout, use the development installer instead:
 
@@ -76,7 +84,8 @@ shims in `~/.local/share/aubeshim/shims`.
 
 Activate aubeshim after `mise activate` or any other tool manager that rewrites
 `PATH`. mise installs its own package-manager shims, so aubeshim must activate
-last for `bun`, `npm`, `pnpm`, and `yarn` to resolve to aubeshim.
+last for `bun`, `bunx`, `npm`, `npx`, `pnpm`, `pnpx`, `pnx`, and `yarn` to
+resolve to aubeshim.
 
 For zsh:
 
@@ -168,7 +177,7 @@ shim = [
 
 `enabled` controls whether aubeshim does any shimming at all and defaults to
 `true`. When `enabled = false`, every invocation passes through to the real
-`bun`, `npm`, `pnpm`, or `yarn`.
+`bun`, `bunx`, `npm`, `npx`, `pnpm`, `pnpx`, `pnx`, or `yarn`.
 
 `ignore` is a list of directory globs that should pass through to the real
 package manager. `shim` is a list of directory globs that should use `aube`.
@@ -206,8 +215,12 @@ Environment variables can override tool discovery:
 - `AUBESHIM_CONFIG`: path to the aubeshim config file.
 - `AUBESHIM_AUBE`: path to the aube binary.
 - `AUBESHIM_REAL_BUN`: path to the real Bun binary.
+- `AUBESHIM_REAL_BUNX`: path to the real bunx binary.
 - `AUBESHIM_REAL_NPM`: path to the real npm binary.
+- `AUBESHIM_REAL_NPX`: path to the real npx binary.
 - `AUBESHIM_REAL_PNPM`: path to the real pnpm binary.
+- `AUBESHIM_REAL_PNPX`: path to the real pnpx binary.
+- `AUBESHIM_REAL_PNX`: path to the real pnx binary.
 - `AUBESHIM_REAL_YARN`: path to the real Yarn binary.
 - `AUBESHIM_SHIM_DIR`: path to the installed shim directory.
 
