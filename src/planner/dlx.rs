@@ -51,8 +51,18 @@ fn translate_pnpm_dlx_args(args: &[OsString]) -> Option<Vec<OsString>> {
             out.extend_from_slice(&args[i..]);
             break;
         }
-        if arg == "--allow-build" || arg.starts_with("--allow-build=") {
-            return None;
+        if arg.starts_with("--allow-build=") {
+            out.push(args[i].clone());
+            i += 1;
+            continue;
+        }
+        if arg == "--allow-build" {
+            let value = args.get(i + 1)?;
+            let mut flag = OsString::from("--allow-build=");
+            flag.push(value);
+            out.push(flag);
+            i += 2;
+            continue;
         }
         if arg == "-s" {
             out.push(OsString::from("--silent"));
@@ -190,10 +200,7 @@ fn translate_npx_args(args: &[OsString]) -> TranslatedNpx {
 }
 
 fn pnpm_dlx_flag_takes_value(arg: &str) -> bool {
-    matches!(
-        long_flag_name(arg),
-        "allow-build" | "package" | "reporter" | "registry"
-    )
+    matches!(long_flag_name(arg), "package" | "reporter" | "registry")
 }
 
 fn npx_aube_dlx_flag(arg: &str) -> bool {

@@ -1,8 +1,8 @@
 # aubeshim
 
 `aubeshim` installs PATH shims that let existing `bun`, `bunx`, `npm`, `npx`,
-`pnpm`, `pnpx`, `pnx`, and `yarn` commands use [aube](https://aube.en.dev) when
-the command shape is compatible.
+`pnpm`, `pnpx`, `pnx`, and `yarn` commands use
+[aube](https://github.com/jdx/aube/) when the command shape is compatible.
 
 The goal is to get aube's fast installs, strict layout, and run-time
 auto-install checks without editing each project's scripts.
@@ -10,8 +10,8 @@ auto-install checks without editing each project's scripts.
 For developers with many JavaScript checkouts using several different package
 managers, that can mean hundreds of gigabytes of duplicate dependencies saved.
 
-Note: `aubeshim` is a third-party project and is not associated with en.dev, the
-organization behind aube and mise.
+Note: `aubeshim` is a third-party project and is not associated with jdx or the
+aube project.
 
 ## Behavior
 
@@ -32,11 +32,12 @@ organization behind aube and mise.
   real Bun binary.
 - One-off runner shims route compatible commands to `aube dlx`. That includes
   `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
+- For `pnpm dlx`, `pnpx`, and `pnx`, `--allow-build <package>` flags are
+  normalized to aube's `--allow-build=<package>` form.
 - One-off runner no-install modes use `aube exec --no-install`. That includes
   `bunx --no-install`, `bun dlx --no-install`, and `npx --no-install`.
 - Runner flags that need exact package-manager behavior fall back to the real
-  tool. Examples include `bunx --bun`, `npx --workspace`, and
-  `pnpx --allow-build`.
+  tool. Examples include `bunx --bun` and `npx --workspace`.
 - `--version` and `-v` print the real package manager version. In repos where
   aubeshim is configured to shim, they also print the aubeshim and aube versions
   in a parenthesized hint.

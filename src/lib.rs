@@ -590,15 +590,21 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
-    fn pnpm_dlx_allow_build_uses_real_pnpm_until_aube_supports_it() {
-        for args in [
-            &["dlx", "--allow-build=esbuild", "vite"][..],
-            &["dlx", "--allow-build", "esbuild", "vite"][..],
+    fn pnpm_dlx_allow_build_uses_aube_dlx() {
+        for (args, expected) in [
+            (
+                &["dlx", "--allow-build=esbuild", "vite"][..],
+                vec!["dlx", "--allow-build=esbuild", "vite"],
+            ),
+            (
+                &["dlx", "--allow-build", "esbuild", "vite"][..],
+                vec!["dlx", "--allow-build=esbuild", "vite"],
+            ),
         ] {
             let plan = plan_for(ShimTool::Pnpm, &os(args));
 
-            assert_eq!(plan.target, Target::RealPnpm);
-            assert_eq!(strings(&plan.args), args);
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
         }
     }
 
@@ -1031,14 +1037,24 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
-    fn pnx_and_pnpx_allow_build_use_real_tools_until_aube_supports_it() {
-        let pnx = plan_for(ShimTool::Pnx, &os(&["--allow-build=esbuild", "vite"]));
-        let pnpx = plan_for(ShimTool::Pnpx, &os(&["--allow-build=esbuild", "vite"]));
+    fn pnx_and_pnpx_allow_build_use_aube_dlx() {
+        for tool in [ShimTool::Pnx, ShimTool::Pnpx] {
+            for (args, expected) in [
+                (
+                    &["--allow-build=esbuild", "vite"][..],
+                    vec!["dlx", "--allow-build=esbuild", "vite"],
+                ),
+                (
+                    &["--allow-build", "esbuild", "vite"][..],
+                    vec!["dlx", "--allow-build=esbuild", "vite"],
+                ),
+            ] {
+                let plan = plan_for(tool, &os(args));
 
-        assert_eq!(pnx.target, Target::RealPnx);
-        assert_eq!(strings(&pnx.args), vec!["--allow-build=esbuild", "vite"]);
-        assert_eq!(pnpx.target, Target::RealPnpx);
-        assert_eq!(strings(&pnpx.args), vec!["--allow-build=esbuild", "vite"]);
+                assert_eq!(plan.target, Target::Aube);
+                assert_eq!(strings(&plan.args), expected);
+            }
+        }
     }
 
     #[test]
