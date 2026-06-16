@@ -119,3 +119,89 @@ fn yarn_only_command(command: &str) -> bool {
         "constraints" | "global" | "node" | "npm" | "plugin" | "set" | "workspaces"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::test_support::{
+        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
+    };
+
+    #[test]
+    fn yarn_without_args_installs() {
+        let plan = plan(&os(&[]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn yarn_version_flag_passes_through() {
+        let plan = plan(&os(&["--version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["--version"]);
+    }
+
+    #[test]
+    fn yarn_install_ignore_optional_uses_aube_no_optional() {
+        let plan = plan(&os(&["install", "--ignore-optional"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install", "--no-optional"]);
+    }
+
+    #[test]
+    fn yarn_run_style_script_passes_to_aube_external_script() {
+        let plan = plan(&os(&["dev", "--host"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["dev", "--host"]);
+    }
+
+    #[test]
+    fn yarn_global_package_operations_use_mise() {
+        for (args, expected) in [
+            (
+                &["add", "-g", "cowsay"][..],
+                mise_global_use_args(&["cowsay"]),
+            ),
+            (
+                &["install", "--global", "typescript"][..],
+                mise_global_use_args(&["typescript"]),
+            ),
+            (
+                &["remove", "-g", "cowsay"][..],
+                mise_global_unuse_args(&["cowsay"]),
+            ),
+            (
+                &["up", "-g", "eslint"][..],
+                mise_global_use_args(&["eslint"]),
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Mise);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn yarn_global_outdated_uses_mise() {
+        let plan = plan(&os(&["outdated", "--global=true", "oxlint"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            mise_global_outdated_args(&["npm:oxlint"])
+        );
+    }
+
+    #[test]
+    fn yarn_only_command_uses_real_yarn() {
+        let plan = plan(&os(&["plugin", "list"]));
+
+        assert_eq!(plan.target, Target::RealYarn);
+        assert_eq!(strings(&plan.args), vec!["plugin", "list"]);
+    }
+}

@@ -253,3 +253,93 @@ fn npx_aube_dlx_flag_takes_value(arg: &str) -> bool {
             | "reporter"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::test_support::{os, strings};
+
+    #[test]
+    fn npx_uses_aube_dlx() {
+        let plan = plan_npx(&os(&["--yes", "-s", "create-vite", "app"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["dlx", "--silent", "create-vite", "app"]
+        );
+    }
+
+    #[test]
+    fn npx_package_and_call_flags_use_aube_dlx() {
+        let package = plan_npx(&os(&["--package", "typescript", "tsc", "--version"]));
+        let call = plan_npx(&os(&["--call", "eslint && tsc"]));
+
+        assert_eq!(package.target, Target::Aube);
+        assert_eq!(
+            strings(&package.args),
+            vec!["dlx", "--package", "typescript", "tsc", "--version"]
+        );
+        assert_eq!(call.target, Target::Aube);
+        assert_eq!(strings(&call.args), vec!["dlx", "-c", "eslint && tsc"]);
+    }
+
+    #[test]
+    fn npx_no_install_uses_aube_exec() {
+        let plan = plan_npx(&os(&["--no-install", "prettier", "--version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["exec", "--no-install", "prettier", "--", "--version"]
+        );
+    }
+
+    #[test]
+    fn npx_workspace_flags_use_real_npx() {
+        for args in [
+            &["--workspace", "app", "eslint"][..],
+            &["--workspaces", "eslint"][..],
+            &["--include-workspace-root", "eslint"][..],
+        ] {
+            let plan = plan_npx(&os(args));
+
+            assert_eq!(plan.target, Target::RealNpx);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn pnx_and_pnpx_use_aube_dlx() {
+        for real_target in [Target::RealPnx, Target::RealPnpx] {
+            let plan = plan_pnpm_dlx(&os(&["-s", "vite", "--version"]), real_target);
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(
+                strings(&plan.args),
+                vec!["dlx", "--silent", "vite", "--version"]
+            );
+        }
+    }
+
+    #[test]
+    fn pnx_and_pnpx_allow_build_use_aube_dlx() {
+        for real_target in [Target::RealPnx, Target::RealPnpx] {
+            for (args, expected) in [
+                (
+                    &["--allow-build=esbuild", "vite"][..],
+                    vec!["dlx", "--allow-build=esbuild", "vite"],
+                ),
+                (
+                    &["--allow-build", "esbuild", "vite"][..],
+                    vec!["dlx", "--allow-build=esbuild", "vite"],
+                ),
+            ] {
+                let plan = plan_pnpm_dlx(&os(args), real_target);
+
+                assert_eq!(plan.target, Target::Aube);
+                assert_eq!(strings(&plan.args), expected);
+            }
+        }
+    }
+}

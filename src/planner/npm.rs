@@ -457,3 +457,281 @@ fn npm_only_command(command: &str) -> bool {
         "owner" | "pkg" | "publish" | "search" | "set-script" | "token" | "unpublish" | "whoami"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::test_support::{
+        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
+    };
+
+    #[test]
+    fn npm_install_without_packages_uses_aube_install() {
+        let plan = plan(&os(&["install"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install"]);
+    }
+
+    #[test]
+    fn npm_install_with_packages_becomes_aube_add() {
+        let plan = plan(&os(&["i", "-D", "vitest"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["add", "-D", "vitest"]);
+    }
+
+    #[test]
+    fn npm_install_with_global_prefix_keeps_prefix_before_add() {
+        let plan = plan(&os(&["--prefix", "packages/app", "install", "react"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["--prefix", "packages/app", "add", "react"]
+        );
+    }
+
+    #[test]
+    fn npm_global_install_with_package_uses_mise() {
+        let plan = plan(&os(&["-g", "install", "cowsay"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), mise_global_use_args(&["cowsay"]));
+    }
+
+    #[test]
+    fn npm_global_remove_uses_mise() {
+        let remove = plan(&os(&["remove", "--global", "cowsay"]));
+
+        assert_eq!(remove.target, Target::Mise);
+        assert_eq!(strings(&remove.args), mise_global_unuse_args(&["cowsay"]));
+    }
+
+    #[test]
+    fn npm_global_install_without_package_uses_real_npm() {
+        let plan = plan(&os(&["install", "-g"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["install", "-g"]);
+    }
+
+    #[test]
+    fn npm_global_install_skips_package_manager_flags_for_mise() {
+        let plan = plan(&os(&[
+            "install",
+            "-g",
+            "--registry",
+            "https://registry.npmjs.org",
+            "--json",
+            "@biomejs/biome@latest",
+        ]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            mise_global_use_args(&["@biomejs/biome@latest"])
+        );
+    }
+
+    #[test]
+    fn npm_global_outdated_uses_mise() {
+        let plan = plan(&os(&["outdated", "--global", "@biomejs/biome"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            mise_global_outdated_args(&["npm:@biomejs/biome"])
+        );
+    }
+
+    #[test]
+    fn npm_json_metadata_commands_use_real_npm() {
+        for args in [
+            &["view", "prettier", "dist-tags", "--json"][..],
+            &["show", "typescript", "version", "--json=true"][..],
+            &["info", "eslint", "--json"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_metadata_without_json_still_uses_aube_view() {
+        let plan = plan(&os(&["show", "typescript", "version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["view", "typescript", "version"]);
+    }
+
+    #[test]
+    fn npm_list_with_npm_specific_output_flags_uses_real_npm() {
+        for args in [
+            &["list", "-a", "--include", "prod", "--omit", "dev", "--json"][..],
+            &["ls", "--all", "--long"][..],
+            &["--json", "list"][..],
+            &["list", "--parseable"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn plain_npm_list_still_uses_aube() {
+        let plan = plan(&os(&["list", "--depth", "Infinity"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["list", "--depth", "Infinity"]);
+    }
+
+    #[test]
+    fn npm_install_with_workspace_value_does_not_treat_value_as_package() {
+        let plan = plan(&os(&["install", "--workspace", "app"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install", "--workspace", "app"]);
+    }
+
+    #[test]
+    fn npm_install_drops_cache_audit_fund_and_progress_options() {
+        for (args, expected) in [
+            (
+                &["--cache", "/tmp/npm-cache", "--no-audit", "--no-fund", "ci"][..],
+                vec!["ci"],
+            ),
+            (
+                &[
+                    "ci",
+                    "--cache=/tmp/npm-cache",
+                    "--audit=false",
+                    "--fund=false",
+                    "--progress=false",
+                ][..],
+                vec!["ci"],
+            ),
+            (
+                &[
+                    "--cache",
+                    "/tmp/npm-cache",
+                    "install",
+                    "react",
+                    "--no-audit",
+                    "--no-progress",
+                ][..],
+                vec!["add", "react"],
+            ),
+            (&["install", "--progress", "false"][..], vec!["install"]),
+            (
+                &["install", "--progress", "react"][..],
+                vec!["add", "react"],
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn npm_install_unsupported_progress_value_uses_real_npm() {
+        let plan = plan(&os(&["ci", "--progress=maybe"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["ci", "--progress=maybe"]);
+    }
+
+    #[test]
+    fn npm_install_omit_filters_use_aube_equivalents() {
+        let plan = plan(&os(&["ci", "--omit", "optional", "--omit=dev"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["ci", "--no-optional", "--prod"]);
+    }
+
+    #[test]
+    fn npm_install_hoisted_strategy_uses_aube() {
+        for (args, expected) in [
+            (&["ci", "--install-strategy=hoisted"][..], vec!["ci"]),
+            (
+                &["install", "--install-strategy", "hoisted"][..],
+                vec!["install"],
+            ),
+            (
+                &["install", "--install-strategy=hoisted", "react"][..],
+                vec!["add", "react"],
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn npm_install_unsupported_layout_strategy_uses_real_npm() {
+        for args in [
+            &["ci", "--install-strategy=nested"][..],
+            &["install", "--install-strategy", "shallow"][..],
+            &["install", "--legacy-bundling"][..],
+            &["install", "--global-style=true", "react"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_install_unsupported_omit_filter_uses_real_npm() {
+        let plan = plan(&os(&["ci", "--omit=peer"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["ci", "--omit=peer"]);
+    }
+
+    #[test]
+    fn npm_run_script_uses_aube_run() {
+        let plan = plan(&os(&["run-script", "build"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["run", "build"]);
+    }
+
+    #[test]
+    fn npm_only_command_uses_real_npm() {
+        let plan = plan(&os(&["pkg", "get", "name"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["pkg", "get", "name"]);
+    }
+
+    #[test]
+    fn npm_publish_uses_real_npm() {
+        for args in [
+            &["publish", "--access", "public"][..],
+            &["unpublish", "aubeshim@0.0.0"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealNpm);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn unknown_npm_command_uses_real_npm() {
+        let plan = plan(&os(&["doctor"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["doctor"]);
+    }
+}

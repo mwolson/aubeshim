@@ -42,3 +42,80 @@ fn pnpm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::test_support::{
+        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
+    };
+
+    #[test]
+    fn pnpm_passes_through_to_aube() {
+        let plan = plan(&os(&["install", "--frozen-lockfile"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
+    }
+
+    #[test]
+    fn pnpm_dlx_uses_aube_dlx_with_supported_flags() {
+        let plan = plan(&os(&["dlx", "-s", "vite", "--version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["dlx", "--silent", "vite", "--version"]
+        );
+    }
+
+    #[test]
+    fn pnpm_dlx_allow_build_uses_aube_dlx() {
+        for (args, expected) in [
+            (
+                &["dlx", "--allow-build=esbuild", "vite"][..],
+                vec!["dlx", "--allow-build=esbuild", "vite"],
+            ),
+            (
+                &["dlx", "--allow-build", "esbuild", "vite"][..],
+                vec!["dlx", "--allow-build=esbuild", "vite"],
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn pnpm_global_package_operations_use_mise() {
+        for (args, expected) in [
+            (
+                &["add", "-g", "cowsay"][..],
+                mise_global_use_args(&["cowsay"]),
+            ),
+            (
+                &["install", "--global", "typescript"][..],
+                mise_global_use_args(&["typescript"]),
+            ),
+            (
+                &["remove", "-g", "cowsay"][..],
+                mise_global_unuse_args(&["cowsay"]),
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Mise);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn pnpm_global_outdated_uses_mise() {
+        let plan = plan(&os(&["outdated", "-g"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), mise_global_outdated_args(&[]));
+    }
+}

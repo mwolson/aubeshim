@@ -298,3 +298,44 @@ fn long_flag_name(arg: &str) -> &str {
         .map(|(name, _)| name)
         .unwrap_or_else(|| arg.trim_start_matches("--"))
 }
+
+#[cfg(test)]
+pub(super) mod test_support {
+    use crate::home_dir;
+    use std::ffi::OsString;
+
+    pub(super) fn os(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    pub(super) fn strings(args: &[OsString]) -> Vec<String> {
+        args.iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    pub(super) fn mise_global_outdated_args(extra: &[&str]) -> Vec<String> {
+        let mut args = vec![
+            "outdated".to_owned(),
+            "--bump".to_owned(),
+            "-C".to_owned(),
+            home_dir().to_string_lossy().into_owned(),
+        ];
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args
+    }
+
+    pub(super) fn mise_global_use_args(packages: &[&str]) -> Vec<String> {
+        mise_global_package_args("use", packages)
+    }
+
+    pub(super) fn mise_global_unuse_args(packages: &[&str]) -> Vec<String> {
+        mise_global_package_args("unuse", packages)
+    }
+
+    fn mise_global_package_args(command: &str, packages: &[&str]) -> Vec<String> {
+        let mut args = vec![command.to_owned(), "-g".to_owned()];
+        args.extend(packages.iter().map(|arg| format!("npm:{arg}")));
+        args
+    }
+}

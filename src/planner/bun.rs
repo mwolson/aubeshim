@@ -364,3 +364,257 @@ fn looks_like_file_entrypoint(arg: &str) -> bool {
             Some("cjs" | "cts" | "js" | "jsx" | "mjs" | "mts" | "tsx" | "ts")
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::planner::test_support::{
+        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
+    };
+
+    #[test]
+    fn bun_version_flag_is_normally_real_bun() {
+        let plan = plan(&os(&["--version"]));
+
+        assert_eq!(plan.target, Target::RealBun);
+        assert_eq!(strings(&plan.args), vec!["--version"]);
+    }
+
+    #[test]
+    fn bun_install_uses_aube_install() {
+        let plan = plan(&os(&["install", "--frozen-lockfile"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
+    }
+
+    #[test]
+    fn bun_install_omit_optional_uses_aube_no_optional() {
+        let plan = plan(&os(&["install", "--production", "--omit", "optional"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["install", "--production", "--no-optional"]
+        );
+    }
+
+    #[test]
+    fn bun_install_unsupported_omit_filter_uses_real_bun() {
+        let plan = plan(&os(&["install", "--omit=peer"]));
+
+        assert_eq!(plan.target, Target::RealBun);
+        assert_eq!(strings(&plan.args), vec!["install", "--omit=peer"]);
+    }
+
+    #[test]
+    fn bun_run_uses_aube_run() {
+        let plan = plan(&os(&["run", "dev"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["run", "dev"]);
+    }
+
+    #[test]
+    fn bun_run_with_runtime_flags_uses_real_bun() {
+        for args in [
+            &["--watch", "run", "dev"][..],
+            &["run", "--watch", "dev"][..],
+            &["run", "--bun", "dev"][..],
+            &["run", "-b", "dev"][..],
+            &["run", "--preload", "./setup.ts", "dev"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_file_entrypoints_use_real_bun() {
+        for args in [
+            &["run", "./src/app.ts"][..],
+            &["run", "../scripts/dev.tsx"][..],
+            &["run", "/tmp/app.mjs"][..],
+            &["run", "server.jsx"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_script_args_still_use_aube() {
+        for args in [
+            &["run", "dev", "--watch"][..],
+            &["run", "dev", "--", "--watch"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_x_strips_auto_install_flags_before_the_binary() {
+        for args in [
+            &["x", "--install=fallback", "electron-builder", "--linux"][..],
+            &["x", "--install=auto", "electron-builder", "--linux"][..],
+            &["x", "--install=force", "electron-builder", "--linux"][..],
+            &["x", "-i", "electron-builder", "--linux"][..],
+            &["--install=fallback", "x", "electron-builder", "--linux"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(
+                strings(&plan.args),
+                vec!["dlx", "electron-builder", "--linux"]
+            );
+        }
+    }
+
+    #[test]
+    fn bun_x_preserves_auto_install_flags_after_the_binary() {
+        for (args, expected) in [
+            (
+                &["x", "electron-builder", "--install=fallback"][..],
+                vec!["dlx", "electron-builder", "--install=fallback"],
+            ),
+            (
+                &["x", "electron-builder", "--no-install"][..],
+                vec!["dlx", "electron-builder", "--no-install"],
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn bun_x_no_install_uses_aube_exec_without_package_selection() {
+        for args in [
+            &["x", "--no-install", "prettier", "--version"][..],
+            &["--no-install", "x", "prettier", "--version"][..],
+            &[
+                "x",
+                "--package",
+                "prettier",
+                "--no-install",
+                "prettier",
+                "--version",
+            ][..],
+            &[
+                "x",
+                "--package=prettier",
+                "--no-install",
+                "prettier",
+                "--version",
+            ][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(
+                strings(&plan.args),
+                vec!["exec", "--no-install", "prettier", "--", "--version"]
+            );
+        }
+    }
+
+    #[test]
+    fn bun_x_bun_runtime_flag_uses_real_bun() {
+        for args in [
+            &["x", "--bun", "vite", "dev"][..],
+            &["--bun", "x", "vite", "dev"][..],
+            &["x", "-p", "vite", "--bun", "vite", "dev"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bunx_uses_aube_dlx() {
+        let plan = plan_bunx(&os(&["--package", "@angular/cli", "ng", "new", "app"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["dlx", "--package", "@angular/cli", "ng", "new", "app"]
+        );
+    }
+
+    #[test]
+    fn bunx_no_install_uses_aube_exec() {
+        let plan = plan_bunx(&os(&["--no-install", "prettier", "--version"]));
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["exec", "--no-install", "prettier", "--", "--version"]
+        );
+    }
+
+    #[test]
+    fn bunx_bun_runtime_flag_uses_real_bunx() {
+        let plan = plan_bunx(&os(&["--bun", "vite", "dev"]));
+
+        assert_eq!(plan.target, Target::RealBunx);
+        assert_eq!(strings(&plan.args), vec!["--bun", "vite", "dev"]);
+    }
+
+    #[test]
+    fn bun_global_package_operations_use_mise() {
+        for (args, expected) in [
+            (
+                &["add", "-g", "cowsay"][..],
+                mise_global_use_args(&["cowsay"]),
+            ),
+            (
+                &["install", "--global", "typescript"][..],
+                mise_global_use_args(&["typescript"]),
+            ),
+            (
+                &["remove", "-g", "cowsay"][..],
+                mise_global_unuse_args(&["cowsay"]),
+            ),
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::Mise);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn bun_global_outdated_uses_mise() {
+        let plan = plan(&os(&["outdated", "-g", "--json"]));
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), mise_global_outdated_args(&["--json"]));
+    }
+
+    #[test]
+    fn bun_runtime_command_uses_real_bun() {
+        for args in [
+            &["-e", "console.log(1)"][..],
+            &["build", "./src/app.ts"][..],
+            &["pm", "cache"][..],
+            &["test", "src/app.test.ts"][..],
+        ] {
+            let plan = plan(&os(args));
+
+            assert_eq!(plan.target, Target::RealBun);
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+}
