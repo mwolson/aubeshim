@@ -426,7 +426,7 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
-    fn npm_install_drops_cache_audit_and_fund_options() {
+    fn npm_install_drops_cache_audit_fund_and_progress_options() {
         for (args, expected) in [
             (
                 &["--cache", "/tmp/npm-cache", "--no-audit", "--no-fund", "ci"][..],
@@ -438,6 +438,7 @@ shim = ["~/devel/work/*"]
                     "--cache=/tmp/npm-cache",
                     "--audit=false",
                     "--fund=false",
+                    "--progress=false",
                 ][..],
                 vec!["ci"],
             ),
@@ -448,7 +449,13 @@ shim = ["~/devel/work/*"]
                     "install",
                     "react",
                     "--no-audit",
+                    "--no-progress",
                 ][..],
+                vec!["add", "react"],
+            ),
+            (&["install", "--progress", "false"][..], vec!["install"]),
+            (
+                &["install", "--progress", "react"][..],
                 vec!["add", "react"],
             ),
         ] {
@@ -457,6 +464,14 @@ shim = ["~/devel/work/*"]
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(strings(&plan.args), expected);
         }
+    }
+
+    #[test]
+    fn npm_install_unsupported_progress_value_uses_real_npm() {
+        let plan = plan_for(ShimTool::Npm, &os(&["ci", "--progress=maybe"]));
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["ci", "--progress=maybe"]);
     }
 
     #[test]

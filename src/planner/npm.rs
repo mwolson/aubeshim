@@ -113,6 +113,17 @@ fn install_has_packages(args: &[OsString]) -> bool {
         if arg == "--" {
             return i + 1 < args.len();
         }
+        if arg == "--progress" {
+            if args
+                .get(i + 1)
+                .is_some_and(|value| is_bool_value(&value.to_string_lossy()))
+            {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
         if arg.starts_with("--") {
             let name = long_flag_name(&arg);
             if install_flag_takes_value(name) && !arg.contains('=') {
@@ -252,6 +263,28 @@ fn skip_install_noop_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
         return Some(true);
     }
 
+    if arg == "--progress" {
+        *i += 1;
+        if args
+            .get(*i)
+            .is_some_and(|value| is_bool_value(&value.to_string_lossy()))
+        {
+            *i += 1;
+        }
+        return Some(true);
+    }
+    if arg == "--no-progress" {
+        *i += 1;
+        return Some(true);
+    }
+    if let Some(value) = arg.strip_prefix("--progress=") {
+        if is_bool_value(value) {
+            *i += 1;
+            return Some(true);
+        }
+        return None;
+    }
+
     if arg == "--no-audit" || arg == "--no-fund" {
         *i += 1;
         return Some(true);
@@ -267,6 +300,10 @@ fn skip_install_noop_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
     }
 
     Some(false)
+}
+
+fn is_bool_value(value: &str) -> bool {
+    matches!(value.to_ascii_lowercase().as_str(), "true" | "false")
 }
 
 fn normalize_command(command: &str) -> &'static str {
