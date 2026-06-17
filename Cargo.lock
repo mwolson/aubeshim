@@ -66,6 +66,7 @@ dependencies = [
  "clap",
  "glob",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]

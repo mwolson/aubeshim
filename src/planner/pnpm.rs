@@ -51,9 +51,7 @@ fn pnpm_global_package_action(command: &str) -> Option<GlobalPackageAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::test_support::{
-        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
-    };
+    use crate::planner::test_support::{mise_global_unuse_args, mise_global_use_args, os, strings};
 
     #[test]
     fn pnpm_passes_through_to_aube() {
@@ -123,7 +121,7 @@ mod tests {
     fn pnpm_global_outdated_uses_mise() {
         let plan = plan(&os(&["outdated", "-g"]), GlobalPackages::Mise);
 
-        assert_eq!(plan.target, Target::Mise);
-        assert_eq!(strings(&plan.args), mise_global_outdated_args(&[]));
+        assert_eq!(plan.target, Target::MiseGlobalOutdated);
+        assert!(plan.args.is_empty());
     }
 }

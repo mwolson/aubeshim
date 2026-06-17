@@ -16,14 +16,14 @@ pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
         let status = if should_runtime_shim()? {
             run_version(tool, args)?
         } else {
-            run_plan(None, real_plan_for(tool, args))?
+            run_external_plan(None, real_plan_for(tool, args))?
         };
         std::process::exit(exit_code(status));
     }
 
     let plan = runtime_plan_for(tool, args)?;
-    let status = run_plan(Some(tool), plan)?;
-    std::process::exit(exit_code(status));
+    let code = run_plan(Some(tool), plan)?;
+    std::process::exit(code);
 }
 
 fn is_version_request(args: &[OsString]) -> bool {
@@ -85,7 +85,17 @@ fn real_target_for(tool: ShimTool) -> Target {
     }
 }
 
-fn run_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
+fn run_plan(tool: Option<ShimTool>, plan: Plan) -> Result<i32> {
+    match plan.target {
+        Target::MiseGlobalList => return run_mise_global_list(&plan.args),
+        Target::MiseGlobalOutdated => return run_mise_global_outdated(&plan.args),
+        _ => {}
+    }
+
+    Ok(exit_code(run_external_plan(tool, plan)?))
+}
+
+fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
     let program = resolve_target(plan.target)?;
     let mut cmd = ProcessCommand::new(&program);
     cmd.args(&plan.args);
@@ -106,6 +116,102 @@ fn run_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
 
     cmd.status()
         .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
+}
+
+fn run_mise_global_list(args: &[OsString]) -> Result<i32> {
+    let mise = resolve_mise()?.ok_or_else(missing_mise_error)?;
+    let package_args = package_args(args);
+    if !package_args.is_empty() {
+        let mut mise_args = vec![OsString::from("ls"), OsString::from("-g")];
+        mise_args.extend(args.iter().cloned());
+        return run_passthrough(&mise, &mise_args);
+    }
+
+    let tools = read_global_mise_npm_tools(&mise)?;
+    if has_json_arg(args) {
+        println!("{}", serde_json::to_string_pretty(&tools)?);
+        return Ok(0);
+    }
+
+    let names = tool_names(&tools);
+    if names.is_empty() {
+        return Ok(0);
+    }
+
+    let mut mise_args = vec![OsString::from("ls"), OsString::from("-g")];
+    mise_args.extend(names);
+    run_passthrough(&mise, &mise_args)
+}
+
+fn run_mise_global_outdated(args: &[OsString]) -> Result<i32> {
+    let mise = resolve_mise()?.ok_or_else(missing_mise_error)?;
+    let tools = read_global_mise_npm_tools(&mise)?;
+    let names = tool_names(&tools);
+    if names.is_empty() {
+        if has_json_arg(args) {
+            println!("{{}}");
+        } else {
+            println!("mise All tools are up to date");
+        }
+        return Ok(0);
+    }
+
+    let mut mise_args = vec![
+        OsString::from("outdated"),
+        OsString::from("--bump"),
+        OsString::from("-C"),
+        env::temp_dir().into_os_string(),
+    ];
+    mise_args.extend(args.iter().cloned());
+    mise_args.extend(names);
+    run_passthrough(&mise, &mise_args)
+}
+
+fn run_passthrough(program: &OsStr, args: &[OsString]) -> Result<i32> {
+    let status = ProcessCommand::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))?;
+    Ok(exit_code(status))
+}
+
+fn read_global_mise_npm_tools(mise: &OsStr) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let output = ProcessCommand::new(mise)
+        .args(["ls", "-g", "--json"])
+        .output()
+        .with_context(|| format!("failed to run {}", PathBuf::from(mise).display()))?;
+
+    if !output.status.success() {
+        io::stdout().write_all(&output.stdout)?;
+        io::stderr().write_all(&output.stderr)?;
+        bail!("failed to list global mise tools");
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("mise ls -g --json output was invalid")?;
+    let tools = value
+        .as_object()
+        .ok_or_else(|| anyhow!("mise ls -g --json output was not an object"))?;
+
+    Ok(tools
+        .iter()
+        .filter(|(name, _)| name.starts_with("npm:"))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect())
+}
+
+fn tool_names(tools: &serde_json::Map<String, serde_json::Value>) -> Vec<OsString> {
+    tools.keys().map(OsString::from).collect()
+}
+
+fn package_args(args: &[OsString]) -> Vec<&OsString> {
+    args.iter()
+        .filter(|arg| !arg.to_string_lossy().starts_with("--"))
+        .collect()
+}
+
+fn has_json_arg(args: &[OsString]) -> bool {
+    args.iter().any(|arg| arg == "--json")
 }
 
 pub(crate) fn npm_compat_node_linker_env(
@@ -129,6 +235,9 @@ fn resolve_target(target: Target) -> Result<OsString> {
     match target {
         Target::Aube => resolve_aube()?.ok_or_else(|| missing_tool_error("aube", "AUBESHIM_AUBE")),
         Target::Mise => resolve_mise()?.ok_or_else(missing_mise_error),
+        Target::MiseGlobalList | Target::MiseGlobalOutdated => {
+            unreachable!("custom mise targets are handled before target resolution")
+        }
         Target::RealBun => {
             resolve_real_bun()?.ok_or_else(|| missing_tool_error("real bun", "AUBESHIM_REAL_BUN"))
         }

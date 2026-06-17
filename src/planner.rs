@@ -5,11 +5,11 @@ mod pnpm;
 mod yarn;
 
 use crate::config::{should_shim, Config, GlobalPackages};
-use crate::home_dir;
 use crate::shims::ShimTool;
 use anyhow::{bail, Result};
+use std::env;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
@@ -21,6 +21,8 @@ pub struct Plan {
 pub enum Target {
     Aube,
     Mise,
+    MiseGlobalList,
+    MiseGlobalOutdated,
     RealBun,
     RealBunx,
     RealNpm,
@@ -109,22 +111,40 @@ fn global_outdated_without_package(tool: ShimTool, args: &[OsString]) -> bool {
 }
 
 fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
+    let translated = translate_global_outdated_args(args);
+    if !global_outdated_translated_has_package(&translated) {
+        return Plan {
+            target: Target::MiseGlobalOutdated,
+            args: translated,
+        };
+    }
+
     let mut out = vec![
         OsString::from("outdated"),
         OsString::from("--bump"),
         OsString::from("-C"),
-        home_dir().into_os_string(),
+        mise_global_outdated_cwd().into_os_string(),
     ];
-    out.extend(translate_global_outdated_args(args));
+    out.extend(translated);
     Plan {
         target: Target::Mise,
         args: out,
     }
 }
 
+fn plan_mise_global_list(args: &[OsString]) -> Option<Plan> {
+    Some(Plan {
+        target: Target::MiseGlobalList,
+        args: translate_global_list_args(args)?,
+    })
+}
+
 fn global_outdated_has_package(args: &[OsString]) -> bool {
-    translate_global_outdated_args(args)
-        .iter()
+    global_outdated_translated_has_package(&translate_global_outdated_args(args))
+}
+
+fn global_outdated_translated_has_package(args: &[OsString]) -> bool {
+    args.iter()
         .any(|arg| !arg.to_string_lossy().starts_with("--"))
 }
 
@@ -179,6 +199,10 @@ fn plan_aube_global_package_action(action: GlobalPackageAction, args: &[OsString
     })
 }
 
+fn mise_global_outdated_cwd() -> PathBuf {
+    env::temp_dir()
+}
+
 fn command_index(args: &[OsString]) -> Option<usize> {
     let mut i = 0;
     while i < args.len() {
@@ -228,6 +252,47 @@ fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
             }
         })
         .collect()
+}
+
+fn translate_global_list_args(args: &[OsString]) -> Option<Vec<OsString>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut literal = false;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if !literal && arg == "--" {
+            literal = true;
+            i += 1;
+            continue;
+        }
+        if !literal && is_global_marker(&arg) {
+            i += 1;
+            continue;
+        }
+        if !literal && arg == "--json" {
+            out.push(args[i].clone());
+            i += 1;
+            continue;
+        }
+        if !literal && (arg == "--depth" || arg == "--link") {
+            i += 2;
+            continue;
+        }
+        if !literal
+            && (arg.starts_with("--depth=")
+                || arg.starts_with("--global=")
+                || arg.starts_with("--link="))
+        {
+            i += 1;
+            continue;
+        }
+        if !literal && arg.starts_with('-') {
+            return None;
+        }
+        out.push(OsString::from(format!("npm:{arg}")));
+        i += 1;
+    }
+    Some(out)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -376,7 +441,7 @@ fn long_flag_name(arg: &str) -> &str {
 
 #[cfg(test)]
 pub(super) mod test_support {
-    use crate::home_dir;
+    use super::mise_global_outdated_cwd;
     use std::ffi::OsString;
 
     pub(super) fn os(args: &[&str]) -> Vec<OsString> {
@@ -394,7 +459,7 @@ pub(super) mod test_support {
             "outdated".to_owned(),
             "--bump".to_owned(),
             "-C".to_owned(),
-            home_dir().to_string_lossy().into_owned(),
+            mise_global_outdated_cwd().to_string_lossy().into_owned(),
         ];
         args.extend(extra.iter().map(|arg| (*arg).to_owned()));
         args

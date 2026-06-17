@@ -1,7 +1,7 @@
 use super::{
     command_index, has_global_marker, install_flag_takes_value, long_flag_name,
-    plan_global_package_action, plan_mise_global_outdated, push_omit_translation,
-    short_install_flag_takes_value, GlobalPackageAction, Plan, Target,
+    plan_global_package_action, plan_mise_global_list, plan_mise_global_outdated,
+    push_omit_translation, short_install_flag_takes_value, GlobalPackageAction, Plan, Target,
 };
 use crate::config::GlobalPackages;
 use std::ffi::OsString;
@@ -29,6 +29,16 @@ pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
             target: Target::RealNpm,
             args: args.to_vec(),
         };
+    }
+
+    if matches!(command.as_str(), "list" | "ls")
+        && has_global_marker(args)
+        && global_packages == GlobalPackages::Mise
+    {
+        return plan_mise_global_list(rest).unwrap_or_else(|| Plan {
+            target: Target::RealNpm,
+            args: args.to_vec(),
+        });
     }
 
     if matches!(command.as_str(), "list" | "ls") && npm_list_requires_real_npm(args) {
@@ -558,6 +568,14 @@ mod tests {
     }
 
     #[test]
+    fn npm_global_outdated_without_package_filters_to_npm_tools() {
+        let plan = plan(&os(&["outdated", "--global"]), GlobalPackages::Mise);
+
+        assert_eq!(plan.target, Target::MiseGlobalOutdated);
+        assert!(plan.args.is_empty());
+    }
+
+    #[test]
     fn npm_json_metadata_commands_use_real_npm() {
         for args in [
             &["view", "prettier", "dist-tags", "--json"][..],
@@ -603,6 +621,25 @@ mod tests {
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["list", "--depth", "Infinity"]);
+    }
+
+    #[test]
+    fn npm_global_list_uses_mise_global_list() {
+        let plan = plan(&os(&["list", "-g", "--depth=0"]), GlobalPackages::Mise);
+
+        assert_eq!(plan.target, Target::MiseGlobalList);
+        assert!(plan.args.is_empty());
+    }
+
+    #[test]
+    fn npm_global_list_package_uses_mise_global_list() {
+        let plan = plan(
+            &os(&["ls", "--global", "@biomejs/biome", "--json"]),
+            GlobalPackages::Mise,
+        );
+
+        assert_eq!(plan.target, Target::MiseGlobalList);
+        assert_eq!(strings(&plan.args), vec!["npm:@biomejs/biome", "--json"]);
     }
 
     #[test]

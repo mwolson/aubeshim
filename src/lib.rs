@@ -311,12 +311,12 @@ shim = ["~/devel/work/*"]
             &repo.cwd,
         )
         .unwrap();
-        let home = home_dir().to_string_lossy().into_owned();
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
 
         assert_eq!(plan.target, Target::Mise);
         assert_eq!(
             strings(&plan.args),
-            vec!["outdated", "--bump", "-C", &home, "npm:prettier"]
+            vec!["outdated", "--bump", "-C", &cwd, "npm:prettier"]
         );
     }
 

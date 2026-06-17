@@ -371,9 +371,7 @@ fn looks_like_file_entrypoint(arg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::test_support::{
-        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
-    };
+    use crate::planner::test_support::{mise_global_unuse_args, mise_global_use_args, os, strings};
 
     #[test]
     fn bun_version_flag_is_normally_real_bun() {
@@ -605,8 +603,8 @@ mod tests {
     fn bun_global_outdated_uses_mise() {
         let plan = plan(&os(&["outdated", "-g", "--json"]), GlobalPackages::Mise);
 
-        assert_eq!(plan.target, Target::Mise);
-        assert_eq!(strings(&plan.args), mise_global_outdated_args(&["--json"]));
+        assert_eq!(plan.target, Target::MiseGlobalOutdated);
+        assert_eq!(strings(&plan.args), vec!["--json"]);
     }
 
     #[test]
