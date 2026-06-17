@@ -11,8 +11,16 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub enabled: bool,
     pub default: bool,
+    pub global_packages: GlobalPackages,
     pub ignore: Vec<String>,
     pub shim: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GlobalPackages {
+    Mise,
+    Aube,
 }
 
 impl Default for Config {
@@ -20,6 +28,7 @@ impl Default for Config {
         Self {
             enabled: true,
             default: true,
+            global_packages: GlobalPackages::Mise,
             ignore: Vec::new(),
             shim: Vec::new(),
         }

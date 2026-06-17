@@ -6,7 +6,7 @@ mod shell;
 mod shims;
 
 pub use cli::{Cli, Command};
-pub use config::{default_config_path, load_config, Config};
+pub use config::{default_config_path, load_config, Config, GlobalPackages};
 pub use planner::{plan_for, plan_for_config, Plan, Target};
 pub use runtime::exec_shim;
 pub use shell::{shell_init, Shell};
@@ -147,6 +147,7 @@ mod tests {
         let config = Config {
             enabled: true,
             default: true,
+            global_packages: GlobalPackages::Mise,
             ignore: vec![pattern.clone()],
             shim: vec![pattern],
         };
@@ -222,6 +223,7 @@ mod tests {
             r#"
 enabled = false
 default = true
+global_packages = "aube"
 ignore = ["~/devel/work/broken-expo"]
 shim = ["~/devel/work/*"]
 "#,
@@ -231,8 +233,91 @@ shim = ["~/devel/work/*"]
 
         assert!(!config.enabled);
         assert!(config.default);
+        assert_eq!(config.global_packages, GlobalPackages::Aube);
         assert_eq!(config.ignore, vec!["~/devel/work/broken-expo"]);
         assert_eq!(config.shim, vec!["~/devel/work/*"]);
+    }
+
+    #[test]
+    fn config_global_packages_aube_uses_aube_for_global_package_operations() {
+        let repo = repo_fixture();
+        let config = Config {
+            global_packages: GlobalPackages::Aube,
+            ..Config::default()
+        };
+
+        for (tool, args, expected) in [
+            (
+                ShimTool::Npm,
+                &["install", "-g", "cowsay"][..],
+                vec!["add", "-g", "cowsay"],
+            ),
+            (
+                ShimTool::Pnpm,
+                &["add", "-g", "typescript"][..],
+                vec!["add", "-g", "typescript"],
+            ),
+            (
+                ShimTool::Bun,
+                &["remove", "--global", "prettier"][..],
+                vec!["remove", "-g", "prettier"],
+            ),
+            (
+                ShimTool::Yarn,
+                &["remove", "-g", "eslint"][..],
+                vec!["remove", "-g", "eslint"],
+            ),
+        ] {
+            let plan = plan_for_config(tool, &os(args), &config, &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn config_global_packages_aube_rejects_global_outdated_without_package() {
+        let repo = repo_fixture();
+        let config = Config {
+            global_packages: GlobalPackages::Aube,
+            ..Config::default()
+        };
+
+        for (tool, args) in [
+            (ShimTool::Npm, &["outdated", "-g"][..]),
+            (ShimTool::Pnpm, &["outdated", "--global"][..]),
+            (ShimTool::Bun, &["outdated", "-g", "--json"][..]),
+            (ShimTool::Yarn, &["outdated", "--global=true"][..]),
+        ] {
+            let err = plan_for_config(tool, &os(args), &config, &repo.cwd).unwrap_err();
+            let message = err.to_string();
+
+            assert!(message.contains("global_packages = \"aube\""));
+            assert!(message.contains("pass a package name"));
+        }
+    }
+
+    #[test]
+    fn config_global_packages_aube_keeps_package_specific_outdated_on_mise() {
+        let repo = repo_fixture();
+        let config = Config {
+            global_packages: GlobalPackages::Aube,
+            ..Config::default()
+        };
+        let plan = plan_for_config(
+            ShimTool::Npm,
+            &os(&["outdated", "-g", "prettier"]),
+            &config,
+            &repo.cwd,
+        )
+        .unwrap();
+        let home = home_dir().to_string_lossy().into_owned();
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(
+            strings(&plan.args),
+            vec!["outdated", "--bump", "-C", &home, "npm:prettier"]
+        );
     }
 
     #[test]

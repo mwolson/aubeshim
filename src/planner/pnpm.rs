@@ -1,10 +1,11 @@
 use super::{
-    command_index, dlx, has_global_marker, plan_mise_global_outdated,
-    plan_mise_global_package_action, GlobalPackageAction, Plan, Target,
+    command_index, dlx, has_global_marker, plan_global_package_action, plan_mise_global_outdated,
+    GlobalPackageAction, Plan, Target,
 };
+use crate::config::GlobalPackages;
 use std::ffi::OsString;
 
-pub(super) fn plan(args: &[OsString]) -> Plan {
+pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
     if let Some(command_idx) = command_index(args) {
         let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
         if command == "dlx" {
@@ -20,11 +21,15 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
         }
         if has_global_marker(args) {
             if let Some(action) = pnpm_global_package_action(&command) {
-                return plan_mise_global_package_action(action, &args[command_idx + 1..])
-                    .unwrap_or_else(|| Plan {
-                        target: Target::RealPnpm,
-                        args: args.to_vec(),
-                    });
+                return plan_global_package_action(
+                    global_packages,
+                    action,
+                    &args[command_idx + 1..],
+                )
+                .unwrap_or_else(|| Plan {
+                    target: Target::RealPnpm,
+                    args: args.to_vec(),
+                });
             }
         }
     }
@@ -52,7 +57,7 @@ mod tests {
 
     #[test]
     fn pnpm_passes_through_to_aube() {
-        let plan = plan(&os(&["install", "--frozen-lockfile"]));
+        let plan = plan(&os(&["install", "--frozen-lockfile"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
@@ -60,7 +65,10 @@ mod tests {
 
     #[test]
     fn pnpm_dlx_uses_aube_dlx_with_supported_flags() {
-        let plan = plan(&os(&["dlx", "-s", "vite", "--version"]));
+        let plan = plan(
+            &os(&["dlx", "-s", "vite", "--version"]),
+            GlobalPackages::Mise,
+        );
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(
@@ -81,7 +89,7 @@ mod tests {
                 vec!["dlx", "--allow-build=esbuild", "vite"],
             ),
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(strings(&plan.args), expected);
@@ -104,7 +112,7 @@ mod tests {
                 mise_global_unuse_args(&["cowsay"]),
             ),
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Mise);
             assert_eq!(strings(&plan.args), expected);
@@ -113,7 +121,7 @@ mod tests {
 
     #[test]
     fn pnpm_global_outdated_uses_mise() {
-        let plan = plan(&os(&["outdated", "-g"]));
+        let plan = plan(&os(&["outdated", "-g"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::Mise);
         assert_eq!(strings(&plan.args), mise_global_outdated_args(&[]));

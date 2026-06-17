@@ -42,7 +42,7 @@ aube project.
   aubeshim is configured to shim, they also print the aubeshim and aube versions
   in a parenthesized hint.
 
-Global npm tools are managed through mise:
+Global npm tools are managed through mise by default:
 
 - Global `outdated` operations using `-g` or `--global` run `mise outdated` with
   `--bump -C "$HOME"`.
@@ -50,6 +50,11 @@ Global npm tools are managed through mise:
   `mise use -g npm:<package>`.
 - Global package remove operations using `-g` or `--global` run
   `mise unuse -g npm:<package>`.
+- Set `global_packages = "aube"` to use `aube add -g <package>` and
+  `aube remove -g <package>` for direct global package edits instead.
+  Package-specific global `outdated` operations still use mise. Global
+  `outdated` without a package fails because aube does not expose a single
+  global outdated command.
 
 Commands that need npm's exact registry or account behavior fall back to the
 real npm:
@@ -164,6 +169,7 @@ through to the real package manager:
 ```toml
 enabled = true
 default = true
+global_packages = "mise"
 
 ignore = [
   "~/devel/work/broken-expo",
@@ -179,6 +185,13 @@ shim = [
 `enabled` controls whether aubeshim does any shimming at all and defaults to
 `true`. When `enabled = false`, every invocation passes through to the real
 `bun`, `bunx`, `npm`, `npx`, `pnpm`, `pnpx`, `pnx`, or `yarn`.
+
+`global_packages` controls global package add/install/remove operations and
+defaults to `"mise"`. With `"mise"`, commands such as `npm install -g prettier`
+run through `mise use -g npm:prettier`, letting mise manage tool inventory and
+PATH exposure. With `"aube"`, they run through `aube add -g prettier` or
+`aube remove -g prettier`; make sure aube's global bin dir, such as the path
+printed by `aube bin -g`, is on `PATH`.
 
 `ignore` is a list of directory globs that should pass through to the real
 package manager. `shim` is a list of directory globs that should use `aube`.
@@ -233,7 +246,7 @@ tool discovery is available.
 
 ## Global npm Tools
 
-Use mise for globally managed npm CLIs:
+Use mise for globally managed npm CLIs unless `global_packages = "aube"` is set:
 
 ```sh
 mise use -g npm:prettier@latest
@@ -252,6 +265,14 @@ commands to `mise outdated --bump -C "$HOME"` and passes package arguments as
 Direct global add/install/remove commands for named packages also use mise.
 Examples include `npm install -g prettier`, `pnpm add -g eslint`,
 `bun add -g typescript`, and `yarn remove -g cowsay`.
+
+If `global_packages = "aube"` is set, those add/install/remove commands use
+aube's global package store instead. Add the path from `aube bin -g` to `PATH`
+so installed binaries are available to shells and tools.
+
+With `global_packages = "aube"`, global `outdated` without a package is not
+supported. Use package-specific checks or switch back to `"mise"` for global
+tool inventory managed by mise.
 
 ## Compatibility Notes
 

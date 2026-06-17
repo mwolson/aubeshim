@@ -4,10 +4,10 @@ mod npm;
 mod pnpm;
 mod yarn;
 
-use crate::config::{should_shim, Config};
+use crate::config::{should_shim, Config, GlobalPackages};
 use crate::home_dir;
 use crate::shims::ShimTool;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -38,15 +38,23 @@ enum GlobalPackageAction {
 }
 
 pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
+    plan_for_global_packages(tool, args, GlobalPackages::Mise)
+}
+
+fn plan_for_global_packages(
+    tool: ShimTool,
+    args: &[OsString],
+    global_packages: GlobalPackages,
+) -> Plan {
     match tool {
-        ShimTool::Bun => bun::plan(args),
+        ShimTool::Bun => bun::plan(args, global_packages),
         ShimTool::Bunx => bun::plan_bunx(args),
-        ShimTool::Npm => npm::plan(args),
+        ShimTool::Npm => npm::plan(args, global_packages),
         ShimTool::Npx => dlx::plan_npx(args),
-        ShimTool::Pnpm => pnpm::plan(args),
+        ShimTool::Pnpm => pnpm::plan(args, global_packages),
         ShimTool::Pnpx => dlx::plan_pnpm_dlx(args, Target::RealPnpx),
         ShimTool::Pnx => dlx::plan_pnpm_dlx(args, Target::RealPnx),
-        ShimTool::Yarn => yarn::plan(args),
+        ShimTool::Yarn => yarn::plan(args, global_packages),
     }
 }
 
@@ -57,7 +65,12 @@ pub fn plan_for_config(
     cwd: &Path,
 ) -> Result<Plan> {
     if should_shim(config, cwd)? {
-        return Ok(plan_for(tool, args));
+        if config.global_packages == GlobalPackages::Aube
+            && global_outdated_without_package(tool, args)
+        {
+            bail!("global outdated without a package is not supported with `global_packages = \"aube\"` because aube does not expose a single global outdated command; pass a package name or use `global_packages = \"mise\"` for mise-managed global tools");
+        }
+        return Ok(plan_for_global_packages(tool, args, config.global_packages));
     }
 
     Ok(Plan {
@@ -79,6 +92,22 @@ fn real_target_for(tool: ShimTool) -> Target {
     }
 }
 
+fn global_outdated_without_package(tool: ShimTool, args: &[OsString]) -> bool {
+    if !matches!(
+        tool,
+        ShimTool::Bun | ShimTool::Npm | ShimTool::Pnpm | ShimTool::Yarn
+    ) {
+        return false;
+    }
+    let Some(command_idx) = command_index(args) else {
+        return false;
+    };
+    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+    command == "outdated"
+        && has_global_marker(args)
+        && !global_outdated_has_package(&args[command_idx + 1..])
+}
+
 fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
     let mut out = vec![
         OsString::from("outdated"),
@@ -93,8 +122,14 @@ fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
     }
 }
 
+fn global_outdated_has_package(args: &[OsString]) -> bool {
+    translate_global_outdated_args(args)
+        .iter()
+        .any(|arg| !arg.to_string_lossy().starts_with("--"))
+}
+
 fn plan_mise_global_package_action(action: GlobalPackageAction, args: &[OsString]) -> Option<Plan> {
-    let packages = translate_global_package_args(args);
+    let packages = translate_global_package_args(args, GlobalPackageTarget::Mise);
     if packages.is_empty() {
         return None;
     }
@@ -109,6 +144,37 @@ fn plan_mise_global_package_action(action: GlobalPackageAction, args: &[OsString
     out.extend(packages);
     Some(Plan {
         target: Target::Mise,
+        args: out,
+    })
+}
+
+fn plan_global_package_action(
+    backend: GlobalPackages,
+    action: GlobalPackageAction,
+    args: &[OsString],
+) -> Option<Plan> {
+    match backend {
+        GlobalPackages::Mise => plan_mise_global_package_action(action, args),
+        GlobalPackages::Aube => plan_aube_global_package_action(action, args),
+    }
+}
+
+fn plan_aube_global_package_action(action: GlobalPackageAction, args: &[OsString]) -> Option<Plan> {
+    let packages = translate_global_package_args(args, GlobalPackageTarget::Aube);
+    if packages.is_empty() {
+        return None;
+    }
+
+    let mut out = vec![
+        OsString::from(match action {
+            GlobalPackageAction::Use => "add",
+            GlobalPackageAction::Unuse => "remove",
+        }),
+        OsString::from("-g"),
+    ];
+    out.extend(packages);
+    Some(Plan {
+        target: Target::Aube,
         args: out,
     })
 }
@@ -164,7 +230,13 @@ fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
         .collect()
 }
 
-fn translate_global_package_args(args: &[OsString]) -> Vec<OsString> {
+#[derive(Debug, Clone, Copy)]
+enum GlobalPackageTarget {
+    Mise,
+    Aube,
+}
+
+fn translate_global_package_args(args: &[OsString], target: GlobalPackageTarget) -> Vec<OsString> {
     let mut packages = Vec::new();
     let mut i = 0;
     let mut literal = false;
@@ -196,7 +268,10 @@ fn translate_global_package_args(args: &[OsString]) -> Vec<OsString> {
             }
             continue;
         }
-        packages.push(OsString::from(format!("npm:{arg}")));
+        packages.push(match target {
+            GlobalPackageTarget::Mise => OsString::from(format!("npm:{arg}")),
+            GlobalPackageTarget::Aube => args[i].clone(),
+        });
         i += 1;
     }
     packages

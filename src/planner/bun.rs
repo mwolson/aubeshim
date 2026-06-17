@@ -1,12 +1,13 @@
 use super::{
-    command_index, has_global_marker, long_flag_name, plan_mise_global_outdated,
-    plan_mise_global_package_action, prepare_exec_args, translate_omit_args, GlobalPackageAction,
-    Plan, Target,
+    command_index, has_global_marker, long_flag_name, plan_global_package_action,
+    plan_mise_global_outdated, prepare_exec_args, translate_omit_args, GlobalPackageAction, Plan,
+    Target,
 };
+use crate::config::GlobalPackages;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-pub(super) fn plan(args: &[OsString]) -> Plan {
+pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
     let Some(command_idx) = command_index(args) else {
         return Plan {
             target: Target::RealBun,
@@ -47,10 +48,12 @@ pub(super) fn plan(args: &[OsString]) -> Plan {
 
     if has_global_marker(args) {
         if let Some(action) = bun_global_package_action(command) {
-            return plan_mise_global_package_action(action, rest).unwrap_or_else(|| Plan {
-                target: Target::RealBun,
-                args: args.to_vec(),
-            });
+            return plan_global_package_action(global_packages, action, rest).unwrap_or_else(
+                || Plan {
+                    target: Target::RealBun,
+                    args: args.to_vec(),
+                },
+            );
         }
     }
 
@@ -374,7 +377,7 @@ mod tests {
 
     #[test]
     fn bun_version_flag_is_normally_real_bun() {
-        let plan = plan(&os(&["--version"]));
+        let plan = plan(&os(&["--version"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::RealBun);
         assert_eq!(strings(&plan.args), vec!["--version"]);
@@ -382,7 +385,7 @@ mod tests {
 
     #[test]
     fn bun_install_uses_aube_install() {
-        let plan = plan(&os(&["install", "--frozen-lockfile"]));
+        let plan = plan(&os(&["install", "--frozen-lockfile"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
@@ -390,7 +393,10 @@ mod tests {
 
     #[test]
     fn bun_install_omit_optional_uses_aube_no_optional() {
-        let plan = plan(&os(&["install", "--production", "--omit", "optional"]));
+        let plan = plan(
+            &os(&["install", "--production", "--omit", "optional"]),
+            GlobalPackages::Mise,
+        );
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(
@@ -401,7 +407,7 @@ mod tests {
 
     #[test]
     fn bun_install_unsupported_omit_filter_uses_real_bun() {
-        let plan = plan(&os(&["install", "--omit=peer"]));
+        let plan = plan(&os(&["install", "--omit=peer"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::RealBun);
         assert_eq!(strings(&plan.args), vec!["install", "--omit=peer"]);
@@ -409,7 +415,7 @@ mod tests {
 
     #[test]
     fn bun_run_uses_aube_run() {
-        let plan = plan(&os(&["run", "dev"]));
+        let plan = plan(&os(&["run", "dev"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["run", "dev"]);
@@ -424,7 +430,7 @@ mod tests {
             &["run", "-b", "dev"][..],
             &["run", "--preload", "./setup.ts", "dev"][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::RealBun);
             assert_eq!(strings(&plan.args), args);
@@ -439,7 +445,7 @@ mod tests {
             &["run", "/tmp/app.mjs"][..],
             &["run", "server.jsx"][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::RealBun);
             assert_eq!(strings(&plan.args), args);
@@ -452,7 +458,7 @@ mod tests {
             &["run", "dev", "--watch"][..],
             &["run", "dev", "--", "--watch"][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(strings(&plan.args), args);
@@ -468,7 +474,7 @@ mod tests {
             &["x", "-i", "electron-builder", "--linux"][..],
             &["--install=fallback", "x", "electron-builder", "--linux"][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(
@@ -490,7 +496,7 @@ mod tests {
                 vec!["dlx", "electron-builder", "--no-install"],
             ),
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(strings(&plan.args), expected);
@@ -518,7 +524,7 @@ mod tests {
                 "--version",
             ][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(
@@ -535,7 +541,7 @@ mod tests {
             &["--bun", "x", "vite", "dev"][..],
             &["x", "-p", "vite", "--bun", "vite", "dev"][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::RealBun);
             assert_eq!(strings(&plan.args), args);
@@ -588,7 +594,7 @@ mod tests {
                 mise_global_unuse_args(&["cowsay"]),
             ),
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::Mise);
             assert_eq!(strings(&plan.args), expected);
@@ -597,7 +603,7 @@ mod tests {
 
     #[test]
     fn bun_global_outdated_uses_mise() {
-        let plan = plan(&os(&["outdated", "-g", "--json"]));
+        let plan = plan(&os(&["outdated", "-g", "--json"]), GlobalPackages::Mise);
 
         assert_eq!(plan.target, Target::Mise);
         assert_eq!(strings(&plan.args), mise_global_outdated_args(&["--json"]));
@@ -611,7 +617,7 @@ mod tests {
             &["pm", "cache"][..],
             &["test", "src/app.test.ts"][..],
         ] {
-            let plan = plan(&os(args));
+            let plan = plan(&os(args), GlobalPackages::Mise);
 
             assert_eq!(plan.target, Target::RealBun);
             assert_eq!(strings(&plan.args), args);
