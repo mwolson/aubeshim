@@ -50,11 +50,10 @@ Global npm tools are managed through mise by default:
   `mise use -g npm:<package>`.
 - Global package remove operations using `-g` or `--global` run
   `mise unuse -g npm:<package>`.
-- Set `global_packages = "aube"` to use `aube add -g <package>` and
-  `aube remove -g <package>` for direct global package edits instead.
-  Package-specific global `outdated` operations still use mise. Global
-  `outdated` without a package fails because aube does not expose a single
-  global outdated command.
+- `global_packages` defaults to `"auto"` and routes global package commands to
+  mise or aube based on which store owns the package. Set `"mise"` or `"aube"`
+  to force a backend. With aube-backed globals, `outdated -g` runs through
+  `aube outdated -g`.
 
 Commands that need npm's exact registry or account behavior fall back to the
 real npm:
@@ -169,7 +168,7 @@ through to the real package manager:
 ```toml
 enabled = true
 default = true
-global_packages = "mise"
+global_packages = "auto"
 
 ignore = [
   "~/devel/work/broken-expo",
@@ -186,12 +185,15 @@ shim = [
 `true`. When `enabled = false`, every invocation passes through to the real
 `bun`, `bunx`, `npm`, `npx`, `pnpm`, `pnpx`, `pnx`, or `yarn`.
 
-`global_packages` controls global package add/install/remove operations and
-defaults to `"mise"`. With `"mise"`, commands such as `npm install -g prettier`
-run through `mise use -g npm:prettier`, letting mise manage tool inventory and
-PATH exposure. With `"aube"`, they run through `aube add -g prettier` or
-`aube remove -g prettier`; make sure aube's global bin dir, such as the path
-printed by `aube bin -g`, is on `PATH`.
+`global_packages` controls global package add/install/remove/outdated/list
+operations and defaults to `"auto"`. With `"auto"`, aubeshim inspects the
+configured global stores and routes each command to the backend that owns the
+requested package. When no package is named, it prefers aube if aube's global
+store is non-empty and otherwise falls back to mise. With `"mise"`, commands
+such as `npm install -g prettier` run through `mise use -g npm:prettier`,
+letting mise manage tool inventory and PATH exposure. With `"aube"`, they run
+through `aube add -g prettier` or `aube remove -g prettier`; make sure aube's
+global bin dir, such as the path printed by `aube bin -g`, is on `PATH`.
 
 `ignore` is a list of directory globs that should pass through to the real
 package manager. `shim` is a list of directory globs that should use `aube`.
@@ -246,7 +248,8 @@ tool discovery is available.
 
 ## Global npm Tools
 
-Use mise for globally managed npm CLIs unless `global_packages = "aube"` is set:
+Use mise for globally managed npm CLIs unless `global_packages = "aube"` is set
+or auto-detection routes to aube:
 
 ```sh
 mise use -g npm:prettier@latest
@@ -258,21 +261,22 @@ such as `npm view ... --json` to the real npm binary, then leaving mise to
 install and expose the resulting global tool on PATH.
 
 Use `npm outdated -g`, `pnpm outdated -g`, `bun outdated -g`, or
-`yarn outdated -g` to check those tools through mise. aubeshim translates those
-commands to `mise outdated --bump -C "$HOME"` and passes package arguments as
-`npm:<package>`.
+`yarn outdated -g` to check globally installed tools. With mise-backed globals,
+aubeshim translates those commands to `mise outdated --bump -C "$HOME"` and
+passes package arguments as `npm:<package>`. With aube-backed globals, they run
+through `aube outdated -g`.
 
 Direct global add/install/remove commands for named packages also use mise.
 Examples include `npm install -g prettier`, `pnpm add -g eslint`,
 `bun add -g typescript`, and `yarn remove -g cowsay`.
 
-If `global_packages = "aube"` is set, those add/install/remove commands use
-aube's global package store instead. Add the path from `aube bin -g` to `PATH`
-so installed binaries are available to shells and tools.
+If `global_packages = "aube"` is set, or auto-detection selects aube, those
+add/install/remove/outdated commands use aube's global package store instead.
+Add the path from `aube bin -g` to `PATH` so installed binaries are available to
+shells and tools.
 
-With `global_packages = "aube"`, global `outdated` without a package is not
-supported. Use package-specific checks or switch back to `"mise"` for global
-tool inventory managed by mise.
+Set `AUBESHIM_GLOBAL_PACKAGES_BACKEND=auto`, `=mise`, or `=aube` to override the
+configured `global_packages` value for one shell session or command.
 
 ## Compatibility Notes
 

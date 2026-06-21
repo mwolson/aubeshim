@@ -4,9 +4,10 @@ mod npm;
 mod pnpm;
 mod yarn;
 
-use crate::config::{should_shim, Config, GlobalPackages};
+use crate::config::{should_shim, Config};
+use crate::globals::{resolve_backend, ResolvedGlobalBackend};
 use crate::shims::ShimTool;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -40,23 +41,23 @@ enum GlobalPackageAction {
 }
 
 pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
-    plan_for_global_packages(tool, args, GlobalPackages::Mise)
+    plan_for_global_packages(tool, args, ResolvedGlobalBackend::Mise)
 }
 
 fn plan_for_global_packages(
     tool: ShimTool,
     args: &[OsString],
-    global_packages: GlobalPackages,
+    global_backend: ResolvedGlobalBackend,
 ) -> Plan {
     match tool {
-        ShimTool::Bun => bun::plan(args, global_packages),
+        ShimTool::Bun => bun::plan(args, global_backend),
         ShimTool::Bunx => bun::plan_bunx(args),
-        ShimTool::Npm => npm::plan(args, global_packages),
+        ShimTool::Npm => npm::plan(args, global_backend),
         ShimTool::Npx => dlx::plan_npx(args),
-        ShimTool::Pnpm => pnpm::plan(args, global_packages),
+        ShimTool::Pnpm => pnpm::plan(args, global_backend),
         ShimTool::Pnpx => dlx::plan_pnpm_dlx(args, Target::RealPnpx),
         ShimTool::Pnx => dlx::plan_pnpm_dlx(args, Target::RealPnx),
-        ShimTool::Yarn => yarn::plan(args, global_packages),
+        ShimTool::Yarn => yarn::plan(args, global_backend),
     }
 }
 
@@ -67,12 +68,9 @@ pub fn plan_for_config(
     cwd: &Path,
 ) -> Result<Plan> {
     if should_shim(config, cwd)? {
-        if config.global_packages == GlobalPackages::Aube
-            && global_outdated_without_package(tool, args)
-        {
-            bail!("global outdated without a package is not supported with `global_packages = \"aube\"` because aube does not expose a single global outdated command; pass a package name or use `global_packages = \"mise\"` for mise-managed global tools");
-        }
-        return Ok(plan_for_global_packages(tool, args, config.global_packages));
+        let packages = global_package_names_for_resolution(tool, args);
+        let global_backend = resolve_backend(config.global_packages, &packages)?;
+        return Ok(plan_for_global_packages(tool, args, global_backend));
     }
 
     Ok(Plan {
@@ -94,20 +92,58 @@ fn real_target_for(tool: ShimTool) -> Target {
     }
 }
 
-fn global_outdated_without_package(tool: ShimTool, args: &[OsString]) -> bool {
+fn global_package_names_for_resolution(tool: ShimTool, args: &[OsString]) -> Vec<String> {
     if !matches!(
         tool,
         ShimTool::Bun | ShimTool::Npm | ShimTool::Pnpm | ShimTool::Yarn
-    ) {
-        return false;
+    ) || !has_global_marker(args)
+    {
+        return Vec::new();
     }
+
     let Some(command_idx) = command_index(args) else {
-        return false;
+        return Vec::new();
     };
     let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
-    command == "outdated"
-        && has_global_marker(args)
-        && !global_outdated_has_package(&args[command_idx + 1..])
+    let rest = &args[command_idx + 1..];
+
+    if command == "outdated" {
+        return translate_global_outdated_args(rest)
+            .into_iter()
+            .filter_map(|arg| {
+                let name = arg.to_string_lossy();
+                if name.starts_with("--") {
+                    None
+                } else {
+                    Some(crate::globals::normalize_package_name(&name))
+                }
+            })
+            .collect();
+    }
+
+    translate_global_package_args(rest, GlobalPackageTarget::Aube)
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+pub(super) fn plan_global_outdated(
+    global_backend: ResolvedGlobalBackend,
+    args: &[OsString],
+) -> Plan {
+    match global_backend {
+        ResolvedGlobalBackend::Mise => plan_mise_global_outdated(args),
+        ResolvedGlobalBackend::Aube => plan_aube_global_outdated(args),
+    }
+}
+
+fn plan_aube_global_outdated(args: &[OsString]) -> Plan {
+    let mut out = vec![OsString::from("outdated"), OsString::from("-g")];
+    out.extend(translate_aube_global_outdated_args(args));
+    Plan {
+        target: Target::Aube,
+        args: out,
+    }
 }
 
 fn plan_mise_global_outdated(args: &[OsString]) -> Plan {
@@ -139,10 +175,6 @@ fn plan_mise_global_list(args: &[OsString]) -> Option<Plan> {
     })
 }
 
-fn global_outdated_has_package(args: &[OsString]) -> bool {
-    global_outdated_translated_has_package(&translate_global_outdated_args(args))
-}
-
 fn global_outdated_translated_has_package(args: &[OsString]) -> bool {
     args.iter()
         .any(|arg| !arg.to_string_lossy().starts_with("--"))
@@ -168,14 +200,33 @@ fn plan_mise_global_package_action(action: GlobalPackageAction, args: &[OsString
     })
 }
 
+pub(super) fn plan_global_list(
+    global_backend: ResolvedGlobalBackend,
+    args: &[OsString],
+) -> Option<Plan> {
+    match global_backend {
+        ResolvedGlobalBackend::Mise => plan_mise_global_list(args),
+        ResolvedGlobalBackend::Aube => Some(plan_aube_global_list(args)),
+    }
+}
+
+fn plan_aube_global_list(args: &[OsString]) -> Plan {
+    let mut out = vec![OsString::from("list"), OsString::from("-g")];
+    out.extend(translate_aube_global_list_args(args));
+    Plan {
+        target: Target::Aube,
+        args: out,
+    }
+}
+
 fn plan_global_package_action(
-    backend: GlobalPackages,
+    backend: ResolvedGlobalBackend,
     action: GlobalPackageAction,
     args: &[OsString],
 ) -> Option<Plan> {
     match backend {
-        GlobalPackages::Mise => plan_mise_global_package_action(action, args),
-        GlobalPackages::Aube => plan_aube_global_package_action(action, args),
+        ResolvedGlobalBackend::Mise => plan_mise_global_package_action(action, args),
+        ResolvedGlobalBackend::Aube => plan_aube_global_package_action(action, args),
     }
 }
 
@@ -237,6 +288,65 @@ fn has_global_marker(args: &[OsString]) -> bool {
         let arg = arg.to_string_lossy();
         is_global_marker(&arg)
     })
+}
+
+fn translate_aube_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
+    args.iter()
+        .filter_map(|arg| {
+            let s = arg.to_string_lossy();
+            match s.as_ref() {
+                "-g" | "--global" => None,
+                "--json" => Some(arg.clone()),
+                value if value.starts_with("--global=") => None,
+                value if value.starts_with("npm:") => {
+                    Some(OsString::from(value.strip_prefix("npm:").unwrap_or(value)))
+                }
+                _ => Some(arg.clone()),
+            }
+        })
+        .collect()
+}
+
+fn translate_aube_global_list_args(args: &[OsString]) -> Vec<OsString> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut literal = false;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if !literal && arg == "--" {
+            literal = true;
+            i += 1;
+            continue;
+        }
+        if !literal && is_global_marker(&arg) {
+            i += 1;
+            continue;
+        }
+        if !literal && arg == "--json" {
+            out.push(args[i].clone());
+            i += 1;
+            continue;
+        }
+        if !literal && (arg == "--depth" || arg == "--link") {
+            i += 2;
+            continue;
+        }
+        if !literal
+            && (arg.starts_with("--depth=")
+                || arg.starts_with("--global=")
+                || arg.starts_with("--link="))
+        {
+            i += 1;
+            continue;
+        }
+        if !literal && arg.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    out
 }
 
 fn translate_global_outdated_args(args: &[OsString]) -> Vec<OsString> {
@@ -452,6 +562,12 @@ pub(super) mod test_support {
         args.iter()
             .map(|s| s.to_string_lossy().into_owned())
             .collect()
+    }
+
+    pub(super) fn aube_global_outdated_args(extra: &[&str]) -> Vec<String> {
+        let mut args = vec!["outdated".to_owned(), "-g".to_owned()];
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args
     }
 
     pub(super) fn mise_global_outdated_args(extra: &[&str]) -> Vec<String> {

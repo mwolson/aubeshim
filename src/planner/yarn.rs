@@ -1,11 +1,11 @@
 use super::{
-    command_index, has_global_marker, plan_global_package_action, plan_mise_global_outdated,
+    command_index, has_global_marker, plan_global_outdated, plan_global_package_action,
     GlobalPackageAction, Plan, Target,
 };
-use crate::config::GlobalPackages;
+use crate::globals::ResolvedGlobalBackend;
 use std::ffi::OsString;
 
-pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
+pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> Plan {
     let Some(command_idx) = command_index(args) else {
         if !args.is_empty() {
             return Plan {
@@ -30,17 +30,17 @@ pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
     }
 
     if command == "outdated" && has_global_marker(args) {
-        return plan_mise_global_outdated(rest);
+        return plan_global_outdated(global_backend, rest);
     }
 
     if has_global_marker(args) {
         if let Some(action) = yarn_global_package_action(&command) {
-            return plan_global_package_action(global_packages, action, rest).unwrap_or_else(
-                || Plan {
+            return plan_global_package_action(global_backend, action, rest).unwrap_or_else(|| {
+                Plan {
                     target: Target::RealYarn,
                     args: args.to_vec(),
-                },
-            );
+                }
+            });
         }
     }
 
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn yarn_without_args_installs() {
-        let plan = plan(&os(&[]), GlobalPackages::Mise);
+        let plan = plan(&os(&[]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install"]);
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn yarn_version_flag_passes_through() {
-        let plan = plan(&os(&["--version"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["--version"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["--version"]);
@@ -148,7 +148,10 @@ mod tests {
 
     #[test]
     fn yarn_install_ignore_optional_uses_aube_no_optional() {
-        let plan = plan(&os(&["install", "--ignore-optional"]), GlobalPackages::Mise);
+        let plan = plan(
+            &os(&["install", "--ignore-optional"]),
+            ResolvedGlobalBackend::Mise,
+        );
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install", "--no-optional"]);
@@ -156,7 +159,7 @@ mod tests {
 
     #[test]
     fn yarn_run_style_script_passes_to_aube_external_script() {
-        let plan = plan(&os(&["dev", "--host"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["dev", "--host"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["dev", "--host"]);
@@ -182,7 +185,7 @@ mod tests {
                 mise_global_use_args(&["eslint"]),
             ),
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::Mise);
             assert_eq!(strings(&plan.args), expected);
@@ -193,7 +196,7 @@ mod tests {
     fn yarn_global_outdated_uses_mise() {
         let plan = plan(
             &os(&["outdated", "--global=true", "oxlint"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Mise);
@@ -205,7 +208,7 @@ mod tests {
 
     #[test]
     fn yarn_only_command_uses_real_yarn() {
-        let plan = plan(&os(&["plugin", "list"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["plugin", "list"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::RealYarn);
         assert_eq!(strings(&plan.args), vec!["plugin", "list"]);

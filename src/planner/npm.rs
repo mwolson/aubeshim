@@ -1,12 +1,12 @@
 use super::{
-    command_index, has_global_marker, install_flag_takes_value, long_flag_name,
-    plan_global_package_action, plan_mise_global_list, plan_mise_global_outdated,
-    push_omit_translation, short_install_flag_takes_value, GlobalPackageAction, Plan, Target,
+    command_index, has_global_marker, install_flag_takes_value, long_flag_name, plan_global_list,
+    plan_global_outdated, plan_global_package_action, push_omit_translation,
+    short_install_flag_takes_value, GlobalPackageAction, Plan, Target,
 };
-use crate::config::GlobalPackages;
+use crate::globals::ResolvedGlobalBackend;
 use std::ffi::OsString;
 
-pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
+pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> Plan {
     let Some(command_idx) = command_index(args) else {
         return Plan {
             target: Target::Aube,
@@ -31,11 +31,8 @@ pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
         };
     }
 
-    if matches!(command.as_str(), "list" | "ls")
-        && has_global_marker(args)
-        && global_packages == GlobalPackages::Mise
-    {
-        return plan_mise_global_list(rest).unwrap_or_else(|| Plan {
+    if matches!(command.as_str(), "list" | "ls") && has_global_marker(args) {
+        return plan_global_list(global_backend, rest).unwrap_or_else(|| Plan {
             target: Target::RealNpm,
             args: args.to_vec(),
         });
@@ -49,17 +46,17 @@ pub(super) fn plan(args: &[OsString], global_packages: GlobalPackages) -> Plan {
     }
 
     if command == "outdated" && has_global_marker(args) {
-        return plan_mise_global_outdated(rest);
+        return plan_global_outdated(global_backend, rest);
     }
 
     if has_global_marker(args) {
         if let Some(action) = npm_global_package_action(&command) {
-            return plan_global_package_action(global_packages, action, rest).unwrap_or_else(
-                || Plan {
+            return plan_global_package_action(global_backend, action, rest).unwrap_or_else(|| {
+                Plan {
                     target: Target::RealNpm,
                     args: args.to_vec(),
-                },
-            );
+                }
+            });
         }
     }
 
@@ -475,12 +472,13 @@ fn npm_only_command(command: &str) -> bool {
 mod tests {
     use super::*;
     use crate::planner::test_support::{
-        mise_global_outdated_args, mise_global_unuse_args, mise_global_use_args, os, strings,
+        aube_global_outdated_args, mise_global_outdated_args, mise_global_unuse_args,
+        mise_global_use_args, os, strings,
     };
 
     #[test]
     fn npm_install_without_packages_uses_aube_install() {
-        let plan = plan(&os(&["install"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["install"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install"]);
@@ -488,7 +486,7 @@ mod tests {
 
     #[test]
     fn npm_install_with_packages_becomes_aube_add() {
-        let plan = plan(&os(&["i", "-D", "vitest"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["i", "-D", "vitest"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["add", "-D", "vitest"]);
@@ -498,7 +496,7 @@ mod tests {
     fn npm_install_with_global_prefix_keeps_prefix_before_add() {
         let plan = plan(
             &os(&["--prefix", "packages/app", "install", "react"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Aube);
@@ -510,7 +508,10 @@ mod tests {
 
     #[test]
     fn npm_global_install_with_package_uses_mise() {
-        let plan = plan(&os(&["-g", "install", "cowsay"]), GlobalPackages::Mise);
+        let plan = plan(
+            &os(&["-g", "install", "cowsay"]),
+            ResolvedGlobalBackend::Mise,
+        );
 
         assert_eq!(plan.target, Target::Mise);
         assert_eq!(strings(&plan.args), mise_global_use_args(&["cowsay"]));
@@ -518,7 +519,10 @@ mod tests {
 
     #[test]
     fn npm_global_remove_uses_mise() {
-        let remove = plan(&os(&["remove", "--global", "cowsay"]), GlobalPackages::Mise);
+        let remove = plan(
+            &os(&["remove", "--global", "cowsay"]),
+            ResolvedGlobalBackend::Mise,
+        );
 
         assert_eq!(remove.target, Target::Mise);
         assert_eq!(strings(&remove.args), mise_global_unuse_args(&["cowsay"]));
@@ -526,7 +530,7 @@ mod tests {
 
     #[test]
     fn npm_global_install_without_package_uses_real_npm() {
-        let plan = plan(&os(&["install", "-g"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["install", "-g"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["install", "-g"]);
@@ -543,7 +547,7 @@ mod tests {
                 "--json",
                 "@biomejs/biome@latest",
             ]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Mise);
@@ -557,7 +561,7 @@ mod tests {
     fn npm_global_outdated_uses_mise() {
         let plan = plan(
             &os(&["outdated", "--global", "@biomejs/biome"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Mise);
@@ -569,10 +573,32 @@ mod tests {
 
     #[test]
     fn npm_global_outdated_without_package_filters_to_npm_tools() {
-        let plan = plan(&os(&["outdated", "--global"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["outdated", "--global"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::MiseGlobalOutdated);
         assert!(plan.args.is_empty());
+    }
+
+    #[test]
+    fn npm_global_outdated_uses_aube_when_configured() {
+        let plan = plan(
+            &os(&["outdated", "--global", "@biomejs/biome"]),
+            ResolvedGlobalBackend::Aube,
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            aube_global_outdated_args(&["@biomejs/biome"])
+        );
+    }
+
+    #[test]
+    fn npm_global_outdated_without_package_uses_aube_when_configured() {
+        let plan = plan(&os(&["outdated", "--global"]), ResolvedGlobalBackend::Aube);
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), aube_global_outdated_args(&[]));
     }
 
     #[test]
@@ -582,7 +608,7 @@ mod tests {
             &["show", "typescript", "version", "--json=true"][..],
             &["info", "eslint", "--json"][..],
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::RealNpm);
             assert_eq!(strings(&plan.args), args);
@@ -593,7 +619,7 @@ mod tests {
     fn npm_metadata_without_json_still_uses_aube_view() {
         let plan = plan(
             &os(&["show", "typescript", "version"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Aube);
@@ -608,7 +634,7 @@ mod tests {
             &["--json", "list"][..],
             &["list", "--parseable"][..],
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::RealNpm);
             assert_eq!(strings(&plan.args), args);
@@ -617,7 +643,10 @@ mod tests {
 
     #[test]
     fn plain_npm_list_still_uses_aube() {
-        let plan = plan(&os(&["list", "--depth", "Infinity"]), GlobalPackages::Mise);
+        let plan = plan(
+            &os(&["list", "--depth", "Infinity"]),
+            ResolvedGlobalBackend::Mise,
+        );
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["list", "--depth", "Infinity"]);
@@ -625,7 +654,10 @@ mod tests {
 
     #[test]
     fn npm_global_list_uses_mise_global_list() {
-        let plan = plan(&os(&["list", "-g", "--depth=0"]), GlobalPackages::Mise);
+        let plan = plan(
+            &os(&["list", "-g", "--depth=0"]),
+            ResolvedGlobalBackend::Mise,
+        );
 
         assert_eq!(plan.target, Target::MiseGlobalList);
         assert!(plan.args.is_empty());
@@ -635,7 +667,7 @@ mod tests {
     fn npm_global_list_package_uses_mise_global_list() {
         let plan = plan(
             &os(&["ls", "--global", "@biomejs/biome", "--json"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::MiseGlobalList);
@@ -646,7 +678,7 @@ mod tests {
     fn npm_install_with_workspace_value_does_not_treat_value_as_package() {
         let plan = plan(
             &os(&["install", "--workspace", "app"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Aube);
@@ -687,7 +719,7 @@ mod tests {
                 vec!["add", "react"],
             ),
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(strings(&plan.args), expected);
@@ -696,7 +728,10 @@ mod tests {
 
     #[test]
     fn npm_install_unsupported_progress_value_uses_real_npm() {
-        let plan = plan(&os(&["ci", "--progress=maybe"]), GlobalPackages::Mise);
+        let plan = plan(
+            &os(&["ci", "--progress=maybe"]),
+            ResolvedGlobalBackend::Mise,
+        );
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["ci", "--progress=maybe"]);
@@ -706,7 +741,7 @@ mod tests {
     fn npm_install_omit_filters_use_aube_equivalents() {
         let plan = plan(
             &os(&["ci", "--omit", "optional", "--omit=dev"]),
-            GlobalPackages::Mise,
+            ResolvedGlobalBackend::Mise,
         );
 
         assert_eq!(plan.target, Target::Aube);
@@ -726,7 +761,7 @@ mod tests {
                 vec!["add", "react"],
             ),
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::Aube);
             assert_eq!(strings(&plan.args), expected);
@@ -741,7 +776,7 @@ mod tests {
             &["install", "--legacy-bundling"][..],
             &["install", "--global-style=true", "react"][..],
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::RealNpm);
             assert_eq!(strings(&plan.args), args);
@@ -750,7 +785,7 @@ mod tests {
 
     #[test]
     fn npm_install_unsupported_omit_filter_uses_real_npm() {
-        let plan = plan(&os(&["ci", "--omit=peer"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["ci", "--omit=peer"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["ci", "--omit=peer"]);
@@ -758,7 +793,7 @@ mod tests {
 
     #[test]
     fn npm_run_script_uses_aube_run() {
-        let plan = plan(&os(&["run-script", "build"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["run-script", "build"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["run", "build"]);
@@ -766,7 +801,7 @@ mod tests {
 
     #[test]
     fn npm_only_command_uses_real_npm() {
-        let plan = plan(&os(&["pkg", "get", "name"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["pkg", "get", "name"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["pkg", "get", "name"]);
@@ -778,7 +813,7 @@ mod tests {
             &["publish", "--access", "public"][..],
             &["unpublish", "aubeshim@0.0.0"][..],
         ] {
-            let plan = plan(&os(args), GlobalPackages::Mise);
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::RealNpm);
             assert_eq!(strings(&plan.args), args);
@@ -787,7 +822,7 @@ mod tests {
 
     #[test]
     fn unknown_npm_command_uses_real_npm() {
-        let plan = plan(&os(&["doctor"]), GlobalPackages::Mise);
+        let plan = plan(&os(&["doctor"]), ResolvedGlobalBackend::Mise);
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["doctor"]);

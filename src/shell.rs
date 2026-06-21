@@ -9,7 +9,7 @@ pub enum Shell {
     Zsh,
 }
 
-pub fn shell_init(shell: Shell, shim_dir: &Path) -> String {
+pub fn shell_init(shell: Shell, shim_dir: &Path, _persistent: bool) -> String {
     let dir = shell_quote(&shim_dir.to_string_lossy());
     match shell {
         Shell::Bash | Shell::Zsh => format!(

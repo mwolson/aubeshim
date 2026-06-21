@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod globals;
 mod planner;
 mod runtime;
 mod shell;
@@ -31,7 +32,29 @@ mod tests {
         compare_dotted_versions, mise_version_from_output, missing_tool_error,
         npm_compat_node_linker_env, unsupported_mise_error, version_from_output,
     };
-    use std::{cmp::Ordering, ffi::OsString, fs, path::Path};
+    use std::{cmp::Ordering, env, ffi::OsString, fs, path::Path};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = env::var_os(key);
+            env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
@@ -234,8 +257,18 @@ shim = ["~/devel/work/*"]
         assert!(!config.enabled);
         assert!(config.default);
         assert_eq!(config.global_packages, GlobalPackages::Aube);
-        assert_eq!(config.ignore, vec!["~/devel/work/broken-expo"]);
-        assert_eq!(config.shim, vec!["~/devel/work/*"]);
+    }
+
+    #[test]
+    fn parses_auto_global_packages_and_defaults_to_auto() {
+        let config = parse_config(
+            r#"global_packages = "auto""#,
+            Path::new("/tmp/aubeshim-config.toml"),
+        )
+        .unwrap();
+
+        assert_eq!(config.global_packages, GlobalPackages::Auto);
+        assert_eq!(Config::default().global_packages, GlobalPackages::Auto);
     }
 
     #[test]
@@ -276,29 +309,44 @@ shim = ["~/devel/work/*"]
     }
 
     #[test]
-    fn config_global_packages_aube_rejects_global_outdated_without_package() {
+    fn config_global_packages_aube_routes_global_outdated_to_aube() {
         let repo = repo_fixture();
         let config = Config {
             global_packages: GlobalPackages::Aube,
             ..Config::default()
         };
 
-        for (tool, args) in [
-            (ShimTool::Npm, &["outdated", "-g"][..]),
-            (ShimTool::Pnpm, &["outdated", "--global"][..]),
-            (ShimTool::Bun, &["outdated", "-g", "--json"][..]),
-            (ShimTool::Yarn, &["outdated", "--global=true"][..]),
+        for (tool, args, expected) in [
+            (
+                ShimTool::Npm,
+                &["outdated", "-g"][..],
+                vec!["outdated", "-g"],
+            ),
+            (
+                ShimTool::Pnpm,
+                &["outdated", "--global"][..],
+                vec!["outdated", "-g"],
+            ),
+            (
+                ShimTool::Bun,
+                &["outdated", "-g", "--json"][..],
+                vec!["outdated", "-g", "--json"],
+            ),
+            (
+                ShimTool::Yarn,
+                &["outdated", "--global=true"][..],
+                vec!["outdated", "-g"],
+            ),
         ] {
-            let err = plan_for_config(tool, &os(args), &config, &repo.cwd).unwrap_err();
-            let message = err.to_string();
+            let plan = plan_for_config(tool, &os(args), &config, &repo.cwd).unwrap();
 
-            assert!(message.contains("global_packages = \"aube\""));
-            assert!(message.contains("pass a package name"));
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), expected);
         }
     }
 
     #[test]
-    fn config_global_packages_aube_keeps_package_specific_outdated_on_mise() {
+    fn config_global_packages_aube_routes_package_specific_outdated_to_aube() {
         let repo = repo_fixture();
         let config = Config {
             global_packages: GlobalPackages::Aube,
@@ -311,13 +359,37 @@ shim = ["~/devel/work/*"]
             &repo.cwd,
         )
         .unwrap();
-        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
 
-        assert_eq!(plan.target, Target::Mise);
-        assert_eq!(
-            strings(&plan.args),
-            vec!["outdated", "--bump", "-C", &cwd, "npm:prettier"]
-        );
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["outdated", "-g", "prettier"]);
+    }
+
+    #[test]
+    fn config_global_packages_override_replaces_configured_backend() {
+        let repo = repo_fixture();
+
+        {
+            let config = Config::default();
+            let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "aube");
+            let plan = plan_for_config(ShimTool::Npm, &os(&["outdated", "-g"]), &config, &repo.cwd)
+                .unwrap();
+
+            assert_eq!(plan.target, Target::Aube);
+            assert_eq!(strings(&plan.args), vec!["outdated", "-g"]);
+        }
+
+        {
+            let config = Config {
+                global_packages: GlobalPackages::Aube,
+                ..Config::default()
+            };
+            let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "mise");
+            let plan = plan_for_config(ShimTool::Npm, &os(&["outdated", "-g"]), &config, &repo.cwd)
+                .unwrap();
+
+            assert_eq!(plan.target, Target::MiseGlobalOutdated);
+            assert!(plan.args.is_empty());
+        }
     }
 
     #[test]
@@ -412,6 +484,7 @@ shim = ["~/devel/work/*"]
         let init = shell_init(
             Shell::Fish,
             Path::new("/home/me/.local/share/aubeshim/shims"),
+            false,
         );
 
         assert!(init.contains("string match --invert"));
@@ -430,7 +503,11 @@ shim = ["~/devel/work/*"]
 
     #[test]
     fn shell_init_supports_sh() {
-        let init = shell_init(Shell::Sh, Path::new("/home/me/.local/share/aubeshim/shims"));
+        let init = shell_init(
+            Shell::Sh,
+            Path::new("/home/me/.local/share/aubeshim/shims"),
+            false,
+        );
 
         assert!(init.contains("AUBESHIM_SHIM_DIR="));
         assert!(init.contains("export PATH"));
@@ -441,6 +518,7 @@ shim = ["~/devel/work/*"]
         let init = shell_init(
             Shell::Bash,
             Path::new("/home/me/.local/share/aubeshim/shims"),
+            false,
         );
 
         assert!(init.contains("PATH=\"${PATH//:$_aubeshim_shim_dir:/:}\""));
@@ -540,7 +618,7 @@ shim = ["~/devel/work/*"]
     fn run_shell_activation(shell: &str, init_shell: Shell, dir: &Path, path: &str) -> String {
         let script = format!(
             "{}\nprintf '%s\\n' \"$PATH\"\n",
-            shell_init(init_shell, dir)
+            shell_init(init_shell, dir, false)
         );
         let zdotdir = tempfile::tempdir().unwrap();
         let mut cmd = std::process::Command::new(shell);

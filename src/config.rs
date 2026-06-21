@@ -19,6 +19,7 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GlobalPackages {
+    Auto,
     Mise,
     Aube,
 }
@@ -28,7 +29,7 @@ impl Default for Config {
         Self {
             enabled: true,
             default: true,
-            global_packages: GlobalPackages::Mise,
+            global_packages: GlobalPackages::Auto,
             ignore: Vec::new(),
             shim: Vec::new(),
         }
