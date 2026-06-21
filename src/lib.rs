@@ -521,8 +521,20 @@ shim = ["~/devel/work/*"]
             false,
         );
 
-        assert!(init.contains("PATH=\"${PATH//:$_aubeshim_shim_dir:/:}\""));
+        assert!(init.contains("_aubeshim_prepend_path()"));
         assert!(init.contains("export PATH=\"$_aubeshim_shim_dir:$PATH\""));
+        assert!(!init.contains("PROMPT_COMMAND"));
+    }
+
+    #[test]
+    fn shell_init_supports_persistent_zsh_activation() {
+        let init = shell_init(
+            Shell::Zsh,
+            Path::new("/home/me/.local/share/aubeshim/shims"),
+            true,
+        );
+
+        assert!(init.contains("add-zsh-hook precmd _aubeshim_prepend_path"));
     }
 
     #[test]

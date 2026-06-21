@@ -20,9 +20,13 @@ fn run() -> Result<()> {
 
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Some(aubeshim::Command::Activate { shell, shim_dir }) => {
+        Some(aubeshim::Command::Activate {
+            shell,
+            persistent,
+            shim_dir,
+        }) => {
             let dir = shim_dir.unwrap_or_else(aubeshim::default_shim_dir);
-            print!("{}", aubeshim::shell_init(shell, &dir));
+            print!("{}", aubeshim::shell_init(shell, &dir, persistent));
             Ok(())
         }
         Some(aubeshim::Command::Install { force, shim_dir }) => {
@@ -40,6 +44,11 @@ fn dispatch(cli: Cli) -> Result<()> {
             println!("  bash: eval \"$(aubeshim activate bash)\"");
             println!("  fish: aubeshim activate fish | source");
             println!("  sh:   eval \"$(aubeshim activate sh)\"");
+            println!();
+            println!(
+                "If mise runs without --shims, use --persistent so aubeshim stays ahead of mise hook-env:"
+            );
+            println!("  zsh:  eval \"$(aubeshim activate zsh --persistent)\"");
             Ok(())
         }
         Some(aubeshim::Command::Uninstall { shim_dir }) => {

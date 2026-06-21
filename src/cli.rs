@@ -19,6 +19,13 @@ pub enum Command {
     Activate {
         /// Shell syntax to emit
         shell: Shell,
+        /// Keep prepending the shim directory before each prompt
+        ///
+        /// Use this when mise runs without `--shims` and its hook-env prepends
+        /// tool install paths on every prompt. The default one-shot activation
+        /// is enough when mise uses `mise activate <shell> --shims`.
+        #[arg(long)]
+        persistent: bool,
         /// Shim directory to put on PATH
         #[arg(long, value_name = "DIR")]
         shim_dir: Option<PathBuf>,

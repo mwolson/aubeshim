@@ -132,8 +132,17 @@ if (( $+commands[aubeshim] )); then
 fi
 ```
 
-If `.zshrc` later runs `mise activate`, keep the `.zshrc` aubeshim activation
-after it so aubeshim remains first in `PATH`.
+Prefer `mise activate <shell> --shims` so mise keeps a single shims directory on
+`PATH` instead of prepending every tool install path on each prompt. With that
+setup, `aubeshim activate` is enough.
+
+If you use full `mise activate` without `--shims`, add `--persistent` so
+aubeshim re-prepends its shims after mise `hook-env` runs:
+
+```sh
+eval "$(mise activate zsh)"
+eval "$(aubeshim activate zsh --persistent)"
+```
 
 On Linux desktops, adding the POSIX activation to `.profile` can help GUI
 applications launched by the session inherit the shims too, even if your
