@@ -42,18 +42,21 @@ aube project.
   aubeshim is configured to shim, they also print the aubeshim and aube versions
   in a parenthesized hint.
 
-Global npm tools are managed through mise by default:
+Global package commands route through `global_packages`, which defaults to
+`"auto"`:
 
-- Global `outdated` operations using `-g` or `--global` run `mise outdated` with
-  `--bump -C "$HOME"`.
-- Global package add/install operations using `-g` or `--global` run
-  `mise use -g npm:<package>`.
-- Global package remove operations using `-g` or `--global` run
+- With `"auto"`, aubeshim inspects whether mise or aube owns the requested
+  package and routes add/install/remove/outdated/list to the matching backend.
+  When no package is named, it prefers aube if aube's global store is non-empty
+  and otherwise falls back to mise.
+- With mise-backed globals, `npm install -g prettier` becomes
+  `mise use -g npm:prettier`, `npm outdated -g` becomes
+  `mise outdated --bump -C "$HOME"`, and remove operations use
   `mise unuse -g npm:<package>`.
-- `global_packages` defaults to `"auto"` and routes global package commands to
-  mise or aube based on which store owns the package. Set `"mise"` or `"aube"`
-  to force a backend. With aube-backed globals, `outdated -g` runs through
-  `aube outdated -g`.
+- With aube-backed globals, add/install/remove/outdated use aube's global
+  package store (`aube add -g`, `aube outdated -g`, and so on).
+- Set `global_packages = "mise"` or `"aube"` to force a backend, or override for
+  one session with `AUBESHIM_GLOBAL_PACKAGES_BACKEND`.
 
 Commands that need npm's exact registry or account behavior fall back to the
 real npm:
@@ -257,35 +260,32 @@ tool discovery is available.
 
 ## Global npm Tools
 
-Use mise for globally managed npm CLIs unless `global_packages = "aube"` is set
-or auto-detection routes to aube:
+`global_packages` defaults to `"auto"`. Commands such as
+`npm install -g prettier`, `pnpm add -g eslint`, `bun add -g typescript`,
+`yarn remove -g cowsay`, and `npm outdated -g` route to mise or aube based on
+which store owns the package.
+
+With mise-backed globals, aubeshim translates those commands to
+`mise use -g npm:<package>`, `mise unuse -g npm:<package>`, or
+`mise outdated --bump -C "$HOME"`. A typical workflow looks like:
 
 ```sh
 mise use -g npm:prettier@latest
 mise use -g npm:@anthropic-ai/claude-code@latest
 ```
 
-aubeshim keeps that workflow working by sending npm registry metadata commands
-such as `npm view ... --json` to the real npm binary, then leaving mise to
-install and expose the resulting global tool on PATH.
+With aube-backed globals, the same package-manager commands use aube's global
+store instead (`aube add -g`, `aube remove -g`, `aube outdated -g`). Add the
+path from `aube bin -g` to `PATH` so installed binaries are available to shells
+and tools.
 
-Use `npm outdated -g`, `pnpm outdated -g`, `bun outdated -g`, or
-`yarn outdated -g` to check globally installed tools. With mise-backed globals,
-aubeshim translates those commands to `mise outdated --bump -C "$HOME"` and
-passes package arguments as `npm:<package>`. With aube-backed globals, they run
-through `aube outdated -g`.
+aubeshim keeps registry metadata working by sending commands such as
+`npm view ... --json` to the real npm binary. That lets mise and other tools
+consume npm's registry response format even when installs route elsewhere.
 
-Direct global add/install/remove commands for named packages also use mise.
-Examples include `npm install -g prettier`, `pnpm add -g eslint`,
-`bun add -g typescript`, and `yarn remove -g cowsay`.
-
-If `global_packages = "aube"` is set, or auto-detection selects aube, those
-add/install/remove/outdated commands use aube's global package store instead.
-Add the path from `aube bin -g` to `PATH` so installed binaries are available to
-shells and tools.
-
-Set `AUBESHIM_GLOBAL_PACKAGES_BACKEND=auto`, `=mise`, or `=aube` to override the
-configured `global_packages` value for one shell session or command.
+Set `global_packages = "mise"` or `"aube"` to force a backend. Override the
+configured value for one shell session or command with
+`AUBESHIM_GLOBAL_PACKAGES_BACKEND=auto`, `=mise`, or `=aube`.
 
 ## Compatibility Notes
 
