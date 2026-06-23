@@ -13,61 +13,6 @@ managers, that can mean hundreds of gigabytes of duplicate dependencies saved.
 Note: `aubeshim` is a third-party project and is not associated with jdx or the
 aube project.
 
-## Behavior
-
-- Local npm installs and scripts run through `aube`. That includes
-  `npm install`, `npm ci`, `npm run build`, `npm test`, and `npm start`.
-- npm package edits are normalized to aube's command names:
-  `npm install <package>` becomes `aube add <package>`, and
-  `npm uninstall <package>` becomes `aube remove <package>`.
-- npm-shimmed `aube` commands set `AUBE_NODE_LINKER=hoisted` for that invocation
-  unless a node-linker env var is already set. This matches npm's hoisted
-  `node_modules` shape without writing `.npmrc`.
-- `pnpm` commands pass through to `aube`, since aube already presents a
-  pnpm-compatible command surface.
-- `yarn` routes common package-manager commands and script names to `aube`;
-  Yarn-specific management commands fall back to the real Yarn binary.
-- `bun` routes package-manager commands such as `bun install`, `bun add`, and
-  `bun run` to `aube`; runtime commands and unknown commands fall back to the
-  real Bun binary.
-- One-off runner shims route compatible commands to `aube dlx`. That includes
-  `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
-- For `pnpm dlx`, `pnpx`, and `pnx`, `--allow-build <package>` flags are
-  normalized to aube's `--allow-build=<package>` form.
-- One-off runner no-install modes use `aube exec --no-install`. That includes
-  `bunx --no-install`, `bun dlx --no-install`, and `npx --no-install`.
-- Runner flags that need exact package-manager behavior fall back to the real
-  tool. Examples include `bunx --bun` and `npx --workspace`.
-- `--version` and `-v` print the real package manager version. In repos where
-  aubeshim is configured to shim, they also print the aubeshim and aube versions
-  in a parenthesized hint.
-
-Global package commands route through `global_packages`, which defaults to
-`"auto"`:
-
-- With `"auto"`, aubeshim inspects whether mise or aube owns the requested
-  package and routes add/install/remove/outdated/list to the matching backend.
-  When no package is named, it prefers aube if aube's global store is non-empty
-  and otherwise falls back to mise.
-- With mise-backed globals, `npm install -g prettier` becomes
-  `mise use -g npm:prettier`, `npm outdated -g` becomes
-  `mise outdated --bump -C "$HOME"`, and remove operations use
-  `mise unuse -g npm:<package>`.
-- With aube-backed globals, add/install/remove/outdated use aube's global
-  package store (`aube add -g`, `aube outdated -g`, and so on).
-- Set `global_packages = "mise"` or `"aube"` to force a backend, or override for
-  one session with `AUBESHIM_GLOBAL_PACKAGES_BACKEND`.
-
-Commands that need npm's exact registry or account behavior fall back to the
-real npm:
-
-- `npm view`, `npm show`, and `npm info` with `--json` fall back so tools such
-  as mise can consume npm's registry metadata format.
-- `npm publish` and `npm unpublish` fall back to preserve npm's registry, auth,
-  access, provenance, OTP, tag, workspace, and lifecycle semantics.
-- npm-only commands such as `npm pkg`, `npm search`, and `npm whoami` fall back
-  to the real npm.
-
 ## Install
 
 The recommended install path is Cargo:
@@ -286,6 +231,61 @@ consume npm's registry response format even when installs route elsewhere.
 Set `global_packages = "mise"` or `"aube"` to force a backend. Override the
 configured value for one shell session or command with
 `AUBESHIM_GLOBAL_PACKAGES_BACKEND=auto`, `=mise`, or `=aube`.
+
+## Behavior
+
+- Local npm installs and scripts run through `aube`. That includes
+  `npm install`, `npm ci`, `npm run build`, `npm test`, and `npm start`.
+- npm package edits are normalized to aube's command names:
+  `npm install <package>` becomes `aube add <package>`, and
+  `npm uninstall <package>` becomes `aube remove <package>`.
+- npm-shimmed `aube` commands set `AUBE_NODE_LINKER=hoisted` for that invocation
+  unless a node-linker env var is already set. This matches npm's hoisted
+  `node_modules` shape without writing `.npmrc`.
+- `pnpm` commands pass through to `aube`, since aube already presents a
+  pnpm-compatible command surface.
+- `yarn` routes common package-manager commands and script names to `aube`;
+  Yarn-specific management commands fall back to the real Yarn binary.
+- `bun` routes package-manager commands such as `bun install`, `bun add`, and
+  `bun run` to `aube`; runtime commands and unknown commands fall back to the
+  real Bun binary.
+- One-off runner shims route compatible commands to `aube dlx`. That includes
+  `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
+- For `pnpm dlx`, `pnpx`, and `pnx`, `--allow-build <package>` flags are
+  normalized to aube's `--allow-build=<package>` form.
+- One-off runner no-install modes use `aube exec --no-install`. That includes
+  `bunx --no-install`, `bun dlx --no-install`, and `npx --no-install`.
+- Runner flags that need exact package-manager behavior fall back to the real
+  tool. Examples include `bunx --bun` and `npx --workspace`.
+- `--version` and `-v` print the real package manager version. In repos where
+  aubeshim is configured to shim, they also print the aubeshim and aube versions
+  in a parenthesized hint.
+
+Global package commands route through `global_packages`, which defaults to
+`"auto"`:
+
+- With `"auto"`, aubeshim inspects whether mise or aube owns the requested
+  package and routes add/install/remove/outdated/list to the matching backend.
+  When no package is named, it prefers aube if aube's global store is non-empty
+  and otherwise falls back to mise.
+- With mise-backed globals, `npm install -g prettier` becomes
+  `mise use -g npm:prettier`, `npm outdated -g` becomes
+  `mise outdated --bump -C "$HOME"`, and remove operations use
+  `mise unuse -g npm:<package>`.
+- With aube-backed globals, add/install/remove/outdated use aube's global
+  package store (`aube add -g`, `aube outdated -g`, and so on).
+- Set `global_packages = "mise"` or `"aube"` to force a backend, or override for
+  one session with `AUBESHIM_GLOBAL_PACKAGES_BACKEND`.
+
+Commands that need npm's exact registry or account behavior fall back to the
+real npm:
+
+- `npm view`, `npm show`, and `npm info` with `--json` fall back so tools such
+  as mise can consume npm's registry metadata format.
+- `npm publish` and `npm unpublish` fall back to preserve npm's registry, auth,
+  access, provenance, OTP, tag, workspace, and lifecycle semantics.
+- npm-only commands such as `npm pkg`, `npm search`, and `npm whoami` fall back
+  to the real npm.
 
 ## Compatibility Notes
 
