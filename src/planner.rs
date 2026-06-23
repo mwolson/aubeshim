@@ -254,21 +254,14 @@ fn mise_global_outdated_cwd() -> PathBuf {
     env::temp_dir()
 }
 
-fn aube_compat_command(command: &str) -> bool {
+fn compat_delegate_command(command: &str) -> bool {
     matches!(
         command,
-        "owner" | "pkg" | "search" | "set-script" | "token" | "whoami"
+        "login" | "logout" | "owner" | "pkg" | "search" | "set-script" | "token" | "whoami"
     )
 }
 
-fn aube_script_runner_command(command: &str) -> bool {
-    matches!(
-        command,
-        "dlx" | "exec" | "run" | "run-script" | "start" | "stop" | "restart" | "test" | "t" | "x"
-    )
-}
-
-fn aube_prefix_flag_takes_value(name: &str) -> bool {
+fn compat_prefix_flag_takes_value(name: &str) -> bool {
     matches!(
         name,
         "cache"
@@ -283,26 +276,20 @@ fn aube_prefix_flag_takes_value(name: &str) -> bool {
     )
 }
 
-fn aube_short_prefix_flag_takes_value(arg: &str) -> bool {
+fn compat_short_prefix_flag_takes_value(arg: &str) -> bool {
     matches!(arg, "-C" | "-F" | "-w")
 }
 
-/// Return whether an aube invocation may shell out to real npm.
-///
-/// Matches aube's `AUBE_NPM_PATH` contract: npm-only compatibility commands
-/// (`owner`, `pkg`, `search`, `set-script`, `token`, `whoami`).
-pub(crate) fn aube_args_need_npm_path(args: &[OsString]) -> bool {
+fn first_compat_delegate_command(args: &[OsString]) -> Option<String> {
     let mut i = 0;
-    let mut previous_positional: Option<String> = None;
-
     while i < args.len() {
         let arg = args[i].to_string_lossy();
         if arg == "--" {
-            break;
+            return None;
         }
         if arg.starts_with("--") {
             let name = long_flag_name(&arg);
-            if aube_prefix_flag_takes_value(name) && !arg.contains('=') {
+            if compat_prefix_flag_takes_value(name) && !arg.contains('=') {
                 i += 2;
             } else {
                 i += 1;
@@ -310,7 +297,7 @@ pub(crate) fn aube_args_need_npm_path(args: &[OsString]) -> bool {
             continue;
         }
         if arg.starts_with('-') && arg.len() > 1 {
-            if aube_short_prefix_flag_takes_value(&arg) {
+            if compat_short_prefix_flag_takes_value(&arg) {
                 i += 2;
             } else {
                 i += 1;
@@ -319,18 +306,67 @@ pub(crate) fn aube_args_need_npm_path(args: &[OsString]) -> bool {
         }
 
         let command = arg.to_ascii_lowercase();
-        if aube_compat_command(&command)
-            && !previous_positional
-                .as_deref()
-                .is_some_and(aube_script_runner_command)
-        {
-            return true;
-        }
-        previous_positional = Some(command);
-        i += 1;
+        return compat_delegate_command(&command).then_some(command);
     }
+    None
+}
 
+fn compat_delegate_has_leading_prefix(args: &[OsString]) -> bool {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--" {
+            return false;
+        }
+        if arg.starts_with("--") {
+            let name = long_flag_name(&arg);
+            if compat_prefix_flag_takes_value(name) && !arg.contains('=') {
+                return true;
+            }
+            i += 1;
+            continue;
+        }
+        if arg.starts_with('-') && arg.len() > 1 {
+            if compat_short_prefix_flag_takes_value(&arg) {
+                return true;
+            }
+            i += 1;
+            continue;
+        }
+        return false;
+    }
     false
+}
+
+pub(super) fn compat_fallback_target(tool: ShimTool, args: &[OsString]) -> Option<Target> {
+    let command = first_compat_delegate_command(args)?;
+    match tool {
+        ShimTool::Pnpm => match command.as_str() {
+            "login" | "logout" | "owner" | "search" | "whoami" => Some(Target::RealPnpm),
+            "pkg" | "set-script" | "token" => {
+                if compat_delegate_has_leading_prefix(args) {
+                    Some(Target::RealPnpm)
+                } else {
+                    Some(Target::RealNpm)
+                }
+            }
+            _ => None,
+        },
+        ShimTool::Yarn => match command.as_str() {
+            "login" | "logout" => Some(Target::RealYarn),
+            "owner" | "pkg" | "search" | "set-script" | "token" | "whoami" => Some(Target::RealNpm),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(super) fn plan_compat_fallback(tool: ShimTool, args: &[OsString]) -> Option<Plan> {
+    let target = compat_fallback_target(tool, args)?;
+    Some(Plan {
+        target,
+        args: args.to_vec(),
+    })
 }
 
 fn command_index(args: &[OsString]) -> Option<usize> {
@@ -629,58 +665,82 @@ fn long_flag_name(arg: &str) -> &str {
 }
 
 #[cfg(test)]
-mod aube_args_need_npm_path_tests {
-    use super::{aube_args_need_npm_path, test_support::os};
+mod compat_fallback_tests {
+    use super::{compat_fallback_target, plan_for, test_support::os, Target};
+    use crate::shims::ShimTool;
 
     #[test]
-    fn local_project_commands_do_not_need_npm_path() {
+    fn workflow_commands_do_not_compat_fallback() {
+        for (tool, args) in [
+            (ShimTool::Pnpm, &["install"][..]),
+            (ShimTool::Pnpm, &["bin"][..]),
+            (ShimTool::Yarn, &["install"][..]),
+            (ShimTool::Yarn, &["run", "build"][..]),
+        ] {
+            assert!(
+                compat_fallback_target(tool, &os(args)).is_none(),
+                "tool={tool:?} args={args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pnpm_compat_commands_route_to_real_pm() {
+        for (args, expected) in [
+            (&["whoami"][..], Target::RealPnpm),
+            (&["owner", "ls", "prettier"][..], Target::RealPnpm),
+            (&["search", "prettier"][..], Target::RealPnpm),
+            (&["login"][..], Target::RealPnpm),
+            (&["logout"][..], Target::RealPnpm),
+            (&["--filter", "app", "whoami"][..], Target::RealPnpm),
+            (&["token", "list"][..], Target::RealNpm),
+            (&["pkg", "get", "name"][..], Target::RealNpm),
+            (&["set-script", "build", "tsc"][..], Target::RealNpm),
+        ] {
+            let plan = plan_for(ShimTool::Pnpm, &os(args));
+            assert_eq!(plan.target, expected, "args={args:?}");
+            assert_eq!(plan.args, os(args));
+        }
+    }
+
+    #[test]
+    fn yarn_compat_stubs_route_to_real_pm() {
+        for (args, expected) in [
+            (&["whoami"][..], Target::RealNpm),
+            (&["--cwd", "packages/app", "whoami"][..], Target::RealNpm),
+            (&["token", "list"][..], Target::RealNpm),
+            (&["login"][..], Target::RealYarn),
+            (&["logout"][..], Target::RealYarn),
+        ] {
+            let plan = plan_for(ShimTool::Yarn, &os(args));
+            assert_eq!(plan.target, expected, "args={args:?}");
+            assert_eq!(plan.args, os(args));
+        }
+    }
+
+    #[test]
+    fn script_named_like_compat_command_stays_on_aube() {
         for args in [
-            &["bin"][..],
-            &["install"][..],
-            &["ci"][..],
-            &["run", "build"][..],
-            &["exec", "prettier", "--version"][..],
-            &["--prefix", "packages/app", "install"][..],
             &["run", "whoami"][..],
-            &["exec", "token"][..],
+            &["exec", "eslint", "whoami"][..],
+            &["dev", "token"][..],
         ] {
-            assert!(
-                !aube_args_need_npm_path(&os(args)),
-                "unexpected npm-path requirement for `{args:?}`"
-            );
+            let plan = plan_for(ShimTool::Pnpm, &os(args));
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
         }
+
+        let yarn = plan_for(ShimTool::Yarn, &os(&["dev", "token"]));
+        assert_eq!(yarn.target, Target::Aube);
     }
 
     #[test]
-    fn npm_only_compat_commands_need_npm_path() {
+    fn prefixed_pnpm_npm_delegates_stay_on_real_pnpm() {
         for args in [
-            &["owner", "add"][..],
-            &["pkg", "get"][..],
-            &["search", "prettier"][..],
-            &["set-script"][..],
-            &["token", "list"][..],
-            &["whoami"][..],
+            &["--filter", "app", "token", "list"][..],
+            &["--dir", "packages/app", "pkg", "get", "name"][..],
         ] {
-            assert!(
-                aube_args_need_npm_path(&os(args)),
-                "expected npm-path requirement for `{args:?}`"
-            );
-        }
-    }
-
-    #[test]
-    fn compat_commands_after_prefix_flags_need_npm_path() {
-        for args in [
-            &["--filter", "app", "whoami"][..],
-            &["-F", "app", "token", "list"][..],
-            &["--dir", "packages/app", "whoami"][..],
-            &["-C", "packages/app", "search", "prettier"][..],
-            &["--cwd", "packages/app", "whoami"][..],
-        ] {
-            assert!(
-                aube_args_need_npm_path(&os(args)),
-                "expected npm-path requirement for `{args:?}`"
-            );
+            let plan = plan_for(ShimTool::Pnpm, &os(args));
+            assert_eq!(plan.target, Target::RealPnpm, "args={args:?}");
         }
     }
 }

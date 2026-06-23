@@ -1,8 +1,9 @@
 use super::{
-    command_index, dlx, has_global_marker, plan_global_outdated, plan_global_package_action,
-    GlobalPackageAction, Plan, Target,
+    command_index, dlx, has_global_marker, plan_compat_fallback, plan_global_outdated,
+    plan_global_package_action, GlobalPackageAction, Plan, Target,
 };
 use crate::globals::ResolvedGlobalBackend;
+use crate::shims::ShimTool;
 use std::ffi::OsString;
 
 pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> Plan {
@@ -32,6 +33,10 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
                 });
             }
         }
+    }
+
+    if let Some(plan) = plan_compat_fallback(ShimTool::Pnpm, args) {
+        return plan;
     }
 
     Plan {
@@ -126,5 +131,21 @@ mod tests {
 
         assert_eq!(plan.target, Target::MiseGlobalOutdated);
         assert!(plan.args.is_empty());
+    }
+
+    #[test]
+    fn pnpm_whoami_uses_real_pnpm() {
+        let plan = plan(&os(&["whoami"]), ResolvedGlobalBackend::Mise);
+
+        assert_eq!(plan.target, Target::RealPnpm);
+        assert_eq!(strings(&plan.args), vec!["whoami"]);
+    }
+
+    #[test]
+    fn pnpm_token_uses_real_npm() {
+        let plan = plan(&os(&["token", "list"]), ResolvedGlobalBackend::Mise);
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["token", "list"]);
     }
 }

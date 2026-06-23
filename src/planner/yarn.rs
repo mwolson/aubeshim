@@ -1,8 +1,9 @@
 use super::{
-    command_index, has_global_marker, plan_global_outdated, plan_global_package_action,
-    GlobalPackageAction, Plan, Target,
+    command_index, has_global_marker, plan_compat_fallback, plan_global_outdated,
+    plan_global_package_action, GlobalPackageAction, Plan, Target,
 };
 use crate::globals::ResolvedGlobalBackend;
+use crate::shims::ShimTool;
 use std::ffi::OsString;
 
 pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> Plan {
@@ -42,6 +43,10 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
                 }
             });
         }
+    }
+
+    if let Some(plan) = plan_compat_fallback(ShimTool::Yarn, args) {
+        return plan;
     }
 
     let mut out = Vec::with_capacity(args.len());
@@ -212,5 +217,23 @@ mod tests {
 
         assert_eq!(plan.target, Target::RealYarn);
         assert_eq!(strings(&plan.args), vec!["plugin", "list"]);
+    }
+
+    #[test]
+    fn yarn_whoami_uses_real_npm() {
+        let plan = plan(&os(&["whoami"]), ResolvedGlobalBackend::Mise);
+
+        assert_eq!(plan.target, Target::RealNpm);
+        assert_eq!(strings(&plan.args), vec!["whoami"]);
+    }
+
+    #[test]
+    fn yarn_login_and_logout_use_real_yarn() {
+        for args in [&["login"][..], &["logout"][..]] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::RealYarn, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
     }
 }
