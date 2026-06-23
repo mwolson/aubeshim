@@ -1,5 +1,5 @@
 use crate::config::{load_config, should_shim};
-use crate::planner::{plan_for_config, Plan, Target};
+use crate::planner::{aube_args_need_npm_path, plan_for_config, Plan, Target};
 use crate::shims::{default_shim_dir, is_executable_file, ShimTool};
 use anyhow::{anyhow, bail, Context, Result};
 use std::cmp::Ordering;
@@ -100,7 +100,7 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
     let mut cmd = ProcessCommand::new(&program);
     cmd.args(&plan.args);
 
-    if matches!(plan.target, Target::Aube) && env::var_os("AUBE_NPM_PATH").is_none() {
+    if should_inject_aube_npm_path(plan.target, &plan.args) {
         if let Some(npm) = resolve_real_npm()? {
             cmd.env("AUBE_NPM_PATH", npm);
         }
@@ -116,6 +116,19 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
 
     cmd.status()
         .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
+}
+
+/// Whether `run_external_plan` should set `AUBE_NPM_PATH` for PLAN.
+pub(crate) fn should_inject_aube_npm_path(target: Target, args: &[OsString]) -> bool {
+    should_inject_aube_npm_path_with_env(target, args, env::var_os("AUBE_NPM_PATH").is_some())
+}
+
+pub(crate) fn should_inject_aube_npm_path_with_env(
+    target: Target,
+    args: &[OsString],
+    npm_path_already_set: bool,
+) -> bool {
+    matches!(target, Target::Aube) && !npm_path_already_set && aube_args_need_npm_path(args)
 }
 
 fn run_mise_global_list(args: &[OsString]) -> Result<i32> {
@@ -507,4 +520,80 @@ fn exit_code(status: ExitStatus) -> i32 {
     }
 
     1
+}
+
+#[cfg(test)]
+mod inject_aube_npm_path_tests {
+    use super::{should_inject_aube_npm_path_with_env, Target};
+    use crate::planner::plan_for;
+    use crate::planner::test_support::os;
+    use crate::shims::ShimTool;
+
+    #[test]
+    fn native_aube_plans_skip_npm_path_injection() {
+        for (tool, args) in [
+            (ShimTool::Npm, &["bin"][..]),
+            (ShimTool::Npm, &["install"][..]),
+            (ShimTool::Npm, &["run", "build"][..]),
+            (ShimTool::Pnpm, &["install", "--frozen-lockfile"][..]),
+            (ShimTool::Yarn, &["install"][..]),
+        ] {
+            let plan = plan_for(tool, &os(args));
+            assert_eq!(plan.target, Target::Aube, "tool={tool:?} args={args:?}");
+            assert!(
+                !should_inject_aube_npm_path_with_env(plan.target, &plan.args, false),
+                "tool={tool:?} args={args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_npm_plans_skip_aube_npm_path_injection() {
+        for args in [&["publish"][..], &["whoami"][..], &["owner", "ls"][..]] {
+            let plan = plan_for(ShimTool::Npm, &os(args));
+            assert_eq!(plan.target, Target::RealNpm);
+            assert!(!should_inject_aube_npm_path_with_env(
+                plan.target,
+                &plan.args,
+                false
+            ));
+        }
+    }
+
+    #[test]
+    fn compat_aube_plans_inject_npm_path_when_unset() {
+        for (tool, args) in [
+            (ShimTool::Pnpm, &["whoami"][..]),
+            (ShimTool::Pnpm, &["--filter", "app", "whoami"][..]),
+            (ShimTool::Yarn, &["--cwd", "packages/app", "whoami"][..]),
+        ] {
+            let plan = plan_for(tool, &os(args));
+            assert_eq!(plan.target, Target::Aube, "tool={tool:?} args={args:?}");
+            assert!(
+                should_inject_aube_npm_path_with_env(plan.target, &plan.args, false),
+                "tool={tool:?} args={args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn existing_aube_npm_path_is_not_overwritten() {
+        let plan = plan_for(ShimTool::Pnpm, &os(&["whoami"]));
+        assert!(!should_inject_aube_npm_path_with_env(
+            plan.target,
+            &plan.args,
+            true
+        ));
+    }
+
+    #[test]
+    fn script_named_like_compat_command_does_not_inject_npm_path() {
+        let plan = plan_for(ShimTool::Npm, &os(&["run", "whoami"]));
+        assert_eq!(plan.target, Target::Aube);
+        assert!(!should_inject_aube_npm_path_with_env(
+            plan.target,
+            &plan.args,
+            false
+        ));
+    }
 }

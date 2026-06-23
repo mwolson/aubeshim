@@ -254,6 +254,85 @@ fn mise_global_outdated_cwd() -> PathBuf {
     env::temp_dir()
 }
 
+fn aube_compat_command(command: &str) -> bool {
+    matches!(
+        command,
+        "owner" | "pkg" | "search" | "set-script" | "token" | "whoami"
+    )
+}
+
+fn aube_script_runner_command(command: &str) -> bool {
+    matches!(
+        command,
+        "dlx" | "exec" | "run" | "run-script" | "start" | "stop" | "restart" | "test" | "t" | "x"
+    )
+}
+
+fn aube_prefix_flag_takes_value(name: &str) -> bool {
+    matches!(
+        name,
+        "cache"
+            | "color"
+            | "cwd"
+            | "dir"
+            | "filter"
+            | "loglevel"
+            | "prefix"
+            | "registry"
+            | "userconfig"
+    )
+}
+
+fn aube_short_prefix_flag_takes_value(arg: &str) -> bool {
+    matches!(arg, "-C" | "-F" | "-w")
+}
+
+/// Return whether an aube invocation may shell out to real npm.
+///
+/// Matches aube's `AUBE_NPM_PATH` contract: npm-only compatibility commands
+/// (`owner`, `pkg`, `search`, `set-script`, `token`, `whoami`).
+pub(crate) fn aube_args_need_npm_path(args: &[OsString]) -> bool {
+    let mut i = 0;
+    let mut previous_positional: Option<String> = None;
+
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--" {
+            break;
+        }
+        if arg.starts_with("--") {
+            let name = long_flag_name(&arg);
+            if aube_prefix_flag_takes_value(name) && !arg.contains('=') {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if arg.starts_with('-') && arg.len() > 1 {
+            if aube_short_prefix_flag_takes_value(&arg) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        let command = arg.to_ascii_lowercase();
+        if aube_compat_command(&command)
+            && !previous_positional
+                .as_deref()
+                .is_some_and(aube_script_runner_command)
+        {
+            return true;
+        }
+        previous_positional = Some(command);
+        i += 1;
+    }
+
+    false
+}
+
 fn command_index(args: &[OsString]) -> Option<usize> {
     let mut i = 0;
     while i < args.len() {
@@ -550,11 +629,68 @@ fn long_flag_name(arg: &str) -> &str {
 }
 
 #[cfg(test)]
+mod aube_args_need_npm_path_tests {
+    use super::{aube_args_need_npm_path, test_support::os};
+
+    #[test]
+    fn local_project_commands_do_not_need_npm_path() {
+        for args in [
+            &["bin"][..],
+            &["install"][..],
+            &["ci"][..],
+            &["run", "build"][..],
+            &["exec", "prettier", "--version"][..],
+            &["--prefix", "packages/app", "install"][..],
+            &["run", "whoami"][..],
+            &["exec", "token"][..],
+        ] {
+            assert!(
+                !aube_args_need_npm_path(&os(args)),
+                "unexpected npm-path requirement for `{args:?}`"
+            );
+        }
+    }
+
+    #[test]
+    fn npm_only_compat_commands_need_npm_path() {
+        for args in [
+            &["owner", "add"][..],
+            &["pkg", "get"][..],
+            &["search", "prettier"][..],
+            &["set-script"][..],
+            &["token", "list"][..],
+            &["whoami"][..],
+        ] {
+            assert!(
+                aube_args_need_npm_path(&os(args)),
+                "expected npm-path requirement for `{args:?}`"
+            );
+        }
+    }
+
+    #[test]
+    fn compat_commands_after_prefix_flags_need_npm_path() {
+        for args in [
+            &["--filter", "app", "whoami"][..],
+            &["-F", "app", "token", "list"][..],
+            &["--dir", "packages/app", "whoami"][..],
+            &["-C", "packages/app", "search", "prettier"][..],
+            &["--cwd", "packages/app", "whoami"][..],
+        ] {
+            assert!(
+                aube_args_need_npm_path(&os(args)),
+                "expected npm-path requirement for `{args:?}`"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) mod test_support {
     use super::mise_global_outdated_cwd;
     use std::ffi::OsString;
 
-    pub(super) fn os(args: &[&str]) -> Vec<OsString> {
+    pub(crate) fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
     }
 
