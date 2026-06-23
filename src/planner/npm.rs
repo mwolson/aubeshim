@@ -4,7 +4,19 @@ use super::{
     short_install_flag_takes_value, GlobalPackageAction, Plan, Target,
 };
 use crate::globals::ResolvedGlobalBackend;
+use anyhow::{bail, Result};
 use std::ffi::OsString;
+
+pub(super) fn ensure_supported_command(args: &[OsString]) -> Result<()> {
+    let Some(command_idx) = command_index(args) else {
+        return Ok(());
+    };
+    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+    if command == "bin" {
+        bail!("npm removed the `bin` command; use `pnpm bin` or `aube bin` instead");
+    }
+    Ok(())
+}
 
 pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> Plan {
     let Some(command_idx) = command_index(args) else {
@@ -359,7 +371,6 @@ fn known_aube_name(command: &str) -> &'static str {
     match command {
         "add" => "add",
         "audit" => "audit",
-        "bin" => "bin",
         "cache" => "cache",
         "ci" => "ci",
         "clean" => "clean",
@@ -406,7 +417,6 @@ fn known_npm_command(command: &str) -> bool {
         "add"
             | "adduser"
             | "audit"
-            | "bin"
             | "cache"
             | "ci"
             | "clean"
@@ -475,6 +485,17 @@ mod tests {
         aube_global_outdated_args, mise_global_outdated_args, mise_global_unuse_args,
         mise_global_use_args, os, strings,
     };
+
+    #[test]
+    fn npm_bin_command_is_rejected() {
+        for args in [&["bin"][..], &["--prefix", "packages/app", "bin"][..]] {
+            let err = ensure_supported_command(&os(args)).unwrap_err();
+            assert!(
+                err.to_string().contains("npm removed the `bin` command"),
+                "args={args:?}"
+            );
+        }
+    }
 
     #[test]
     fn npm_install_without_packages_uses_aube_install() {

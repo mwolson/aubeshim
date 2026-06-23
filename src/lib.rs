@@ -82,6 +82,15 @@ mod tests {
     }
 
     #[test]
+    fn config_rejects_removed_npm_bin_command() {
+        let repo = repo_fixture();
+        let err = plan_for_config(ShimTool::Npm, &os(&["bin"]), &Config::default(), &repo.cwd)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("npm removed the `bin` command"));
+    }
+
+    #[test]
     fn config_shimmed_version_flags_are_aube_targets() {
         let repo = repo_fixture();
         let plan = plan_for_config(

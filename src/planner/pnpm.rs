@@ -59,6 +59,14 @@ mod tests {
     use crate::planner::test_support::{mise_global_unuse_args, mise_global_use_args, os, strings};
 
     #[test]
+    fn pnpm_bin_uses_aube() {
+        let plan = plan(&os(&["bin"]), ResolvedGlobalBackend::Mise);
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), vec!["bin"]);
+    }
+
+    #[test]
     fn pnpm_passes_through_to_aube() {
         let plan = plan(
             &os(&["install", "--frozen-lockfile"]),

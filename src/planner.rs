@@ -41,15 +41,19 @@ enum GlobalPackageAction {
 }
 
 pub fn plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
-    plan_for_global_packages(tool, args, ResolvedGlobalBackend::Mise)
+    plan_for_global_packages(tool, args, ResolvedGlobalBackend::Mise).unwrap()
 }
 
 fn plan_for_global_packages(
     tool: ShimTool,
     args: &[OsString],
     global_backend: ResolvedGlobalBackend,
-) -> Plan {
-    match tool {
+) -> Result<Plan> {
+    if tool == ShimTool::Npm {
+        npm::ensure_supported_command(args)?;
+    }
+
+    Ok(match tool {
         ShimTool::Bun => bun::plan(args, global_backend),
         ShimTool::Bunx => bun::plan_bunx(args),
         ShimTool::Npm => npm::plan(args, global_backend),
@@ -58,7 +62,7 @@ fn plan_for_global_packages(
         ShimTool::Pnpx => dlx::plan_pnpm_dlx(args, Target::RealPnpx),
         ShimTool::Pnx => dlx::plan_pnpm_dlx(args, Target::RealPnx),
         ShimTool::Yarn => yarn::plan(args, global_backend),
-    }
+    })
 }
 
 pub fn plan_for_config(
@@ -70,7 +74,7 @@ pub fn plan_for_config(
     if should_shim(config, cwd)? {
         let packages = global_package_names_for_resolution(tool, args);
         let global_backend = resolve_backend(config.global_packages, &packages)?;
-        return Ok(plan_for_global_packages(tool, args, global_backend));
+        return plan_for_global_packages(tool, args, global_backend);
     }
 
     Ok(Plan {
