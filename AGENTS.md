@@ -76,6 +76,11 @@ Before creating or updating a repro:
    https://aube.en.dev/package-manager/node-modules.html
    ```
 
+4. File new upstream reports in the aube discussions "Troubleshooting and Bugs"
+   category. Set the category correctly at creation time: changing it after
+   filing does not notify maintainers, and discussion authors cannot delete a
+   mis-filed discussion, only close it.
+
 Repro conventions:
 
 - Keep each case in its own directory with a short, descriptive name.
