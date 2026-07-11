@@ -1,10 +1,12 @@
 use crate::config::{load_config, should_shim};
+use crate::home_dir;
 use crate::planner::{plan_for_config, Plan, Target};
 use crate::shims::{default_shim_dir, is_executable_file, ShimTool};
 use anyhow::{anyhow, bail, Context, Result};
 use std::cmp::Ordering;
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
@@ -105,6 +107,16 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
             npm_compat_node_linker_env(tool, plan.target, node_linker_env_is_set())
         {
             cmd.env(key, value);
+        }
+        // Script commands can auto-install, so apply the safe default to every Aube-backed plan.
+        if safe_package_import_method_env(tool, plan.target, false).is_some() {
+            if let Some((key, value)) = safe_package_import_method_env(
+                tool,
+                plan.target,
+                package_import_method_is_explicit(&plan.args)?,
+            ) {
+                cmd.env(key, value);
+            }
         }
     }
 
@@ -223,6 +235,150 @@ fn node_linker_env_is_set() -> bool {
     env::var_os("AUBE_NODE_LINKER").is_some()
         || env::var_os("NPM_CONFIG_NODE_LINKER").is_some()
         || env::var_os("npm_config_node_linker").is_some()
+}
+
+pub(crate) fn safe_package_import_method_env(
+    tool: ShimTool,
+    target: Target,
+    explicit_package_import_method: bool,
+) -> Option<(&'static str, &'static str)> {
+    if matches!(
+        tool,
+        ShimTool::Bun | ShimTool::Npm | ShimTool::Pnpm | ShimTool::Yarn
+    ) && target == Target::Aube
+        && !explicit_package_import_method
+    {
+        return Some(("AUBE_PACKAGE_IMPORT_METHOD", "clone-or-copy"));
+    }
+    None
+}
+
+fn package_import_method_is_explicit(args: &[OsString]) -> Result<bool> {
+    if package_import_method_arg_is_set(args) || package_import_method_env_is_set() {
+        return Ok(true);
+    }
+
+    let cwd = env::current_dir().context("could not determine current directory")?;
+    Ok(package_import_method_config_is_set(&cwd))
+}
+
+fn package_import_method_arg_is_set(args: &[OsString]) -> bool {
+    args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--package-import-method" || arg.starts_with("--package-import-method=")
+    })
+}
+
+fn package_import_method_env_is_set() -> bool {
+    [
+        "AUBE_PACKAGE_IMPORT_METHOD",
+        "NPM_CONFIG_PACKAGE_IMPORT_METHOD",
+        "npm_config_package_import_method",
+    ]
+    .iter()
+    .any(|key| env::var_os(key).is_some_and(|value| !value.is_empty()))
+}
+
+fn package_import_method_config_is_set(cwd: &Path) -> bool {
+    let user_npmrc = home_dir().join(".npmrc");
+    if npmrc_declares_package_import_method(&user_npmrc) {
+        return true;
+    }
+
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".config"));
+    if toml_declares_package_import_method(&config_home.join("aube/config.toml")) {
+        return true;
+    }
+
+    let Some(root) = find_aube_project_root(cwd) else {
+        return false;
+    };
+    project_declares_package_import_method(&root)
+}
+
+fn project_declares_package_import_method(root: &Path) -> bool {
+    npmrc_declares_package_import_method(&root.join(".npmrc"))
+        || yaml_declares_package_import_method(&root.join("aube-workspace.yaml"))
+        || yaml_declares_package_import_method(&root.join("pnpm-workspace.yaml"))
+        || toml_declares_package_import_method(&root.join(".config/aube/config.toml"))
+}
+
+fn find_aube_project_root(cwd: &Path) -> Option<PathBuf> {
+    let mut package_root = None;
+    for dir in cwd.ancestors() {
+        if dir.join("aube-workspace.yaml").is_file()
+            || dir.join("pnpm-workspace.yaml").is_file()
+            || package_json_declares_workspaces(&dir.join("package.json"))
+        {
+            return Some(dir.to_path_buf());
+        }
+        if package_root.is_none() && dir.join("package.json").is_file() {
+            package_root = Some(dir.to_path_buf());
+        }
+    }
+    package_root
+}
+
+fn package_json_declares_workspaces(path: &Path) -> bool {
+    let Some(content) = read_optional_config(path) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .is_some_and(|manifest| manifest.get("workspaces").is_some())
+}
+
+fn npmrc_declares_package_import_method(path: &Path) -> bool {
+    let Some(content) = read_optional_config(path) else {
+        return false;
+    };
+    content.lines().any(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            return false;
+        }
+        line.split_once('=').is_some_and(|(key, value)| {
+            matches!(key.trim(), "packageImportMethod" | "package-import-method")
+                && !value.trim().is_empty()
+        })
+    })
+}
+
+fn yaml_declares_package_import_method(path: &Path) -> bool {
+    let Some(content) = read_optional_config(path) else {
+        return false;
+    };
+    content.lines().any(|line| {
+        if line.trim_start().len() != line.len() {
+            return false;
+        }
+        let line = line.split('#').next().unwrap_or_default().trim();
+        line.split_once(':').is_some_and(|(key, value)| {
+            key.trim().trim_matches(['\'', '"']) == "packageImportMethod"
+                && !value.trim().is_empty()
+        })
+    })
+}
+
+fn toml_declares_package_import_method(path: &Path) -> bool {
+    let Some(content) = read_optional_config(path) else {
+        return false;
+    };
+    toml::from_str::<toml::Value>(&content)
+        .ok()
+        .is_some_and(|config| {
+            config.get("packageImportMethod").is_some()
+                || config.get("package-import-method").is_some()
+        })
+}
+
+fn read_optional_config(path: &Path) -> Option<String> {
+    if !path.exists() {
+        return None;
+    }
+    fs::read_to_string(path).ok()
 }
 
 fn resolve_target(target: Target) -> Result<OsString> {
@@ -511,4 +667,176 @@ fn exit_code(status: ExitStatus) -> i32 {
     }
 
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shimmed_package_managers_default_to_safe_imports() {
+        for tool in [ShimTool::Bun, ShimTool::Npm, ShimTool::Pnpm, ShimTool::Yarn] {
+            assert_eq!(
+                safe_package_import_method_env(tool, Target::Aube, false),
+                Some(("AUBE_PACKAGE_IMPORT_METHOD", "clone-or-copy"))
+            );
+            assert_eq!(
+                safe_package_import_method_env(tool, Target::Aube, true),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn real_tools_and_runner_shims_keep_their_import_defaults() {
+        for (tool, target) in [
+            (ShimTool::Bun, Target::RealBun),
+            (ShimTool::Npm, Target::RealNpm),
+            (ShimTool::Pnpm, Target::RealPnpm),
+            (ShimTool::Yarn, Target::RealYarn),
+            (ShimTool::Npx, Target::Aube),
+            (ShimTool::Pnpx, Target::Aube),
+            (ShimTool::Pnx, Target::Aube),
+            (ShimTool::Bunx, Target::Aube),
+        ] {
+            assert_eq!(safe_package_import_method_env(tool, target, false), None);
+        }
+    }
+
+    #[test]
+    fn detects_package_import_method_cli_args() {
+        assert!(package_import_method_arg_is_set(&[
+            OsString::from("install"),
+            OsString::from("--package-import-method=hardlink"),
+        ]));
+        assert!(package_import_method_arg_is_set(&[
+            OsString::from("install"),
+            OsString::from("--package-import-method"),
+            OsString::from("copy"),
+        ]));
+        assert!(!package_import_method_arg_is_set(&[OsString::from(
+            "install"
+        )]));
+    }
+
+    #[test]
+    fn detects_package_import_method_in_npmrc() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".npmrc");
+        fs::write(
+            &config,
+            "# package-import-method=hardlink\npackageImportMethod = auto\n",
+        )
+        .unwrap();
+
+        assert!(npmrc_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn ignores_empty_or_noncanonical_package_import_method_in_npmrc() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".npmrc");
+        fs::write(
+            &config,
+            "packageImportMethod=\npackageimportmethod=hardlink\n",
+        )
+        .unwrap();
+
+        assert!(!npmrc_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn detects_top_level_package_import_method_in_workspace_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("aube-workspace.yaml");
+        fs::write(
+            &config,
+            "settings:\n  packageImportMethod: hardlink\npackageImportMethod: auto\n",
+        )
+        .unwrap();
+
+        assert!(yaml_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn ignores_nested_package_import_method_in_workspace_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("aube-workspace.yaml");
+        fs::write(&config, "settings:\n  packageImportMethod: hardlink\n").unwrap();
+
+        assert!(!yaml_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn ignores_empty_package_import_method_in_workspace_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("aube-workspace.yaml");
+        fs::write(&config, "packageImportMethod:\n").unwrap();
+
+        assert!(!yaml_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn detects_package_import_method_in_user_aube_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        fs::write(&config, "packageImportMethod = \"auto\"\n").unwrap();
+
+        assert!(toml_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn malformed_aube_config_does_not_block_shims() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        fs::write(&config, "packageImportMethod = [\n").unwrap();
+
+        assert!(!toml_declares_package_import_method(&config));
+    }
+
+    #[test]
+    fn finds_workspace_root_above_package_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workspace");
+        let package = root.join("packages/app");
+        let cwd = package.join("src");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(root.join("aube-workspace.yaml"), "packages: []\n").unwrap();
+        fs::write(package.join("package.json"), "{}\n").unwrap();
+
+        assert_eq!(find_aube_project_root(&cwd), Some(root));
+    }
+
+    #[test]
+    fn ignores_config_above_single_package_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("parent/project");
+        let cwd = root.join("src");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(
+            dir.path().join("parent/.npmrc"),
+            "packageImportMethod=hardlink\n",
+        )
+        .unwrap();
+        fs::write(root.join("package.json"), "{}\n").unwrap();
+
+        let project_root = find_aube_project_root(&cwd).unwrap();
+        assert_eq!(project_root, root);
+        assert!(!project_declares_package_import_method(&project_root));
+    }
+
+    #[test]
+    fn detects_project_aube_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        fs::create_dir_all(root.join(".config/aube")).unwrap();
+        fs::write(root.join("package.json"), "{}\n").unwrap();
+        fs::write(
+            root.join(".config/aube/config.toml"),
+            "packageImportMethod = \"hardlink\"\n",
+        )
+        .unwrap();
+
+        assert!(project_declares_package_import_method(&root));
+    }
 }

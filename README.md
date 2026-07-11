@@ -242,6 +242,11 @@ configured value for one shell session or command with
 - npm-shimmed `aube` commands set `AUBE_NODE_LINKER=hoisted` for that invocation
   unless a node-linker env var is already set. This matches npm's hoisted
   `node_modules` shape without writing `.npmrc`.
+- Aube-backed `bun`, `npm`, `pnpm`, and `yarn` commands default to
+  `packageImportMethod=clone-or-copy`. This keeps lifecycle scripts and tools
+  that edit `node_modules` from modifying Aube's shared store. Explicit CLI,
+  environment, `.npmrc`, `aube-workspace.yaml`, `pnpm-workspace.yaml`, and user
+  or project Aube config settings take precedence.
 - `pnpm` commands pass through to `aube`, since aube already presents a
   pnpm-compatible command surface.
 - `yarn` routes common package-manager commands and script names to `aube`;
