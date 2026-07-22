@@ -20,7 +20,7 @@ is compatible and falls back to the real package manager otherwise.
 Run the normal Rust format, clippy, and test checks before handing off changes.
 
 ```sh
-bun run hooks:check
+aube run hooks:check
 ```
 
 The hook glob filters on changed files, so run the underlying checks directly
@@ -59,7 +59,7 @@ aube issues found while testing aubeshim migrations. The local checkout lives
 under this repo's ignored `min-repros/` directory when present (nested git repo;
 not part of the aubeshim commit history). Clone metadata is in `.gitclones`
 (gitmodules-compatible keys: `path`, `url`, optional `branch` and `upstream`).
-Refresh with `bun run up:git` or `bun run up`.
+Refresh with `aube run up:git` or `aube run up`.
 
 Before creating or updating a repro:
 
