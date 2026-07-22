@@ -22,7 +22,8 @@
     "init": "bun run up && bun run init:hooks",
     "init:hooks": "lefthook install",
     "test": "cargo test",
-    "up": "bun install && rustup show active-toolchain"
+    "up": "bun run up:git && bun install && rustup show active-toolchain",
+    "up:git": "./scripts/up-git"
   },
   "devDependencies": {
     "lefthook": "^2.1.4",

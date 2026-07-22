@@ -56,7 +56,10 @@ project is ready to lean fully into aube, consider importing to a native
 
 Use `https://github.com/mwolson/tmp-aube-issues` for minimal public repros of
 aube issues found while testing aubeshim migrations. The local checkout lives
-under this repo's ignored `tmp/min-repros` directory when present.
+under this repo's ignored `min-repros/` directory when present (nested git repo;
+not part of the aubeshim commit history). Clone metadata is in `.gitclones`
+(gitmodules-compatible keys: `path`, `url`, optional `branch` and `upstream`).
+Refresh with `bun run up:git` or `bun run up`.
 
 Before creating or updating a repro:
 
@@ -80,6 +83,20 @@ Before creating or updating a repro:
    category. Set the category correctly at creation time: changing it after
    filing does not notify maintainers, and discussion authors cannot delete a
    mis-filed discussion, only close it.
+
+When an upstream discussion is fixed:
+
+1. Retest the minimal repro with the current `aube --version` and update the
+   case list in the repro repo README (move Open to Fixed, record fix version
+   and PR).
+2. Post a short confirmation comment on the discussion with the retested aube
+   version, repro path, and shipping fix/PR.
+3. Mark the maintainer's fix reply as the discussion **Answer** via the GraphQL
+   `markDiscussionCommentAsAnswer` mutation (needs the comment node id from the
+   discussion query). Do **not** close the discussion; leave it open with an
+   accepted answer so it stays searchable in the Troubleshooting category.
+4. Confirm afterward that `answer.author` is the maintainer and `closed` is
+   still false.
 
 Repro conventions:
 

@@ -1,0 +1,4 @@
+[submodule "min-repros"]
+	path = min-repros
+	url = git@github.com:mwolson/tmp-aube-issues.git
+	branch = main

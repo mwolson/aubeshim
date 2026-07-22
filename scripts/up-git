@@ -1,0 +1,130 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "git is required" >&2
+    exit 1
+fi
+
+topdir=$(cd "$(dirname "$0")/.." && pwd)
+cd "$topdir"
+
+resolve_clones_file() {
+    if [[ -n "${GITCLONES_FILE:-}" ]]; then
+        printf '%s\n' "$GITCLONES_FILE"
+        return 0
+    fi
+    if [[ -f "$topdir/.gitclones" ]]; then
+        printf '%s\n' "$topdir/.gitclones"
+        return 0
+    fi
+    if [[ -f "$topdir/.gitmodules" ]]; then
+        printf '%s\n' "$topdir/.gitmodules"
+        return 0
+    fi
+    return 1
+}
+
+if ! clones_file=$(resolve_clones_file); then
+    echo "No .gitclones or .gitmodules found in $topdir" >&2
+    exit 1
+fi
+
+if [[ ! -f "$clones_file" ]]; then
+    echo "Clones file not found: $clones_file" >&2
+    exit 1
+fi
+
+# Collect submodule.<name>.path entries as "name<path>".
+entries=()
+while read -r key path; do
+    [[ -z "${key:-}" || -z "${path:-}" ]] && continue
+    name=${key#submodule.}
+    name=${name%.path}
+    entries+=("${name}"$'\t'"${path}")
+done < <(git config -f "$clones_file" --get-regexp '^submodule\..*\.path$' || true)
+
+if [[ ${#entries[@]} -eq 0 ]]; then
+    echo "No clone entries configured in $clones_file"
+    exit 0
+fi
+
+# When filters are passed, only refresh matching names or paths.
+filter_args=("$@")
+
+for entry in "${entries[@]}"; do
+    name=${entry%%$'\t'*}
+    path=${entry#*$'\t'}
+
+    if [[ ${#filter_args[@]} -gt 0 ]]; then
+        matched=0
+        for want in "${filter_args[@]}"; do
+            if [[ "$want" == "$path" || "$want" == "$name" || "$want" == "${path%/}" ]]; then
+                matched=1
+                break
+            fi
+        done
+        if [[ $matched -eq 0 ]]; then
+            continue
+        fi
+    fi
+
+    url=$(git config -f "$clones_file" --get "submodule.${name}.url" || true)
+    if [[ -z "$url" ]]; then
+        echo "Error: submodule.${name}.url missing in $clones_file" >&2
+        exit 1
+    fi
+
+    main_branch=$(git config -f "$clones_file" --get "submodule.${name}.branch" || true)
+    main_branch=${main_branch:-main}
+
+    upstream_url=$(git config -f "$clones_file" --get "submodule.${name}.upstream" || true)
+
+    echo
+    if [[ ! -e "$path/.git" ]]; then
+        echo "Cloning ${url} into ${path}"
+        mkdir -p "$(dirname "$path")"
+        git clone "$url" "$path"
+    fi
+
+    pushd "$path" >/dev/null
+    echo "Repo: $path"
+
+    if [[ -n "$upstream_url" ]] && ! git remote get-url upstream >/dev/null 2>&1; then
+        if git remote get-url origin >/dev/null 2>&1; then
+            echo "Adding upstream remote (${upstream_url})"
+            git remote add upstream "$upstream_url" 2>/dev/null || true
+        fi
+    fi
+
+    git fetch --all
+
+    set +e
+    cur_branch=$(git symbolic-ref --short -q HEAD)
+    is_gone=$(test -n "$cur_branch" && git branch -vv | grep -E "${cur_branch}.*: gone]")
+    set -e
+
+    if [[ -z "$cur_branch" || -n "$is_gone" ]]; then
+        echo "Checking out branch ${main_branch} for $path"
+        git checkout "$main_branch"
+        cur_branch="$main_branch"
+    fi
+
+    if git remote get-url upstream >/dev/null 2>&1; then
+        git fetch upstream
+    fi
+
+    git pull --rebase
+
+    if [[ "$cur_branch" != "$main_branch" ]]; then
+        echo "Rebasing onto ${main_branch}"
+        if git remote get-url upstream >/dev/null 2>&1; then
+            git rebase upstream/"$main_branch" 2>/dev/null || git rebase origin/"$main_branch"
+        else
+            git rebase origin/"$main_branch"
+        fi
+    fi
+
+    popd >/dev/null
+done
