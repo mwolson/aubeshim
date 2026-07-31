@@ -37,13 +37,19 @@ mod tests {
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
+        _lock: std::sync::RwLockWriteGuard<'static, ()>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
+            let lock = crate::globals::test_env_lock::exclusive();
             let previous = env::var_os(key);
             env::set_var(key, value);
-            Self { key, previous }
+            Self {
+                key,
+                previous,
+                _lock: lock,
+            }
         }
     }
 
@@ -282,6 +288,7 @@ shim = ["~/devel/work/*"]
 
     #[test]
     fn config_global_packages_aube_uses_aube_for_global_package_operations() {
+        let _env = crate::globals::test_env_lock::shared();
         let repo = repo_fixture();
         let config = Config {
             global_packages: GlobalPackages::Aube,
@@ -319,6 +326,7 @@ shim = ["~/devel/work/*"]
 
     #[test]
     fn config_global_packages_aube_routes_global_outdated_to_aube() {
+        let _env = crate::globals::test_env_lock::shared();
         let repo = repo_fixture();
         let config = Config {
             global_packages: GlobalPackages::Aube,
@@ -356,6 +364,7 @@ shim = ["~/devel/work/*"]
 
     #[test]
     fn config_global_packages_aube_routes_package_specific_outdated_to_aube() {
+        let _env = crate::globals::test_env_lock::shared();
         let repo = repo_fixture();
         let config = Config {
             global_packages: GlobalPackages::Aube,

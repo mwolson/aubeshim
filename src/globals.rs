@@ -179,21 +179,46 @@ pub(crate) fn resolve_auto_backend_from_state(
     }
 }
 
+// Process environment is shared across the parallel test threads. Tests that
+// set override variables hold this exclusively for the guard's lifetime; tests
+// whose plans read the ambient environment hold it shared.
+#[cfg(test)]
+pub(crate) mod test_env_lock {
+    use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+    static LOCK: RwLock<()> = RwLock::new(());
+
+    pub(crate) fn shared() -> RwLockReadGuard<'static, ()> {
+        LOCK.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn exclusive() -> RwLockWriteGuard<'static, ()> {
+        LOCK.write().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::RwLockWriteGuard;
 
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
+        _lock: RwLockWriteGuard<'static, ()>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
+            let lock = test_env_lock::exclusive();
             let previous = env::var_os(key);
             env::set_var(key, value);
-            Self { key, previous }
+            Self {
+                key,
+                previous,
+                _lock: lock,
+            }
         }
     }
 
@@ -208,14 +233,18 @@ mod tests {
 
     #[test]
     fn env_backend_override_accepts_auto_mise_and_aube() {
-        let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "auto");
-        assert_eq!(env_backend_override().unwrap(), Some(GlobalPackages::Auto));
-
-        let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "mise");
-        assert_eq!(env_backend_override().unwrap(), Some(GlobalPackages::Mise));
-
-        let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "aube");
-        assert_eq!(env_backend_override().unwrap(), Some(GlobalPackages::Aube));
+        {
+            let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "auto");
+            assert_eq!(env_backend_override().unwrap(), Some(GlobalPackages::Auto));
+        }
+        {
+            let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "mise");
+            assert_eq!(env_backend_override().unwrap(), Some(GlobalPackages::Mise));
+        }
+        {
+            let _guard = EnvVarGuard::set("AUBESHIM_GLOBAL_PACKAGES_BACKEND", "aube");
+            assert_eq!(env_backend_override().unwrap(), Some(GlobalPackages::Aube));
+        }
     }
 
     #[test]
