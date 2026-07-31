@@ -43,6 +43,15 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
         };
     }
 
+    if command == "pack" && pack_has_spec(rest) {
+        // `npm pack <spec>` fetches a registry tarball (or packs a named local
+        // path); aube's pack, like pnpm's, only packs the current project.
+        return Plan {
+            target: Target::RealNpm,
+            args: args.to_vec(),
+        };
+    }
+
     if matches!(command.as_str(), "list" | "ls") && has_global_marker(args) {
         return plan_global_list(global_backend, rest).unwrap_or_else(|| Plan {
             target: Target::RealNpm,
@@ -166,6 +175,39 @@ fn install_has_packages(args: &[OsString]) -> bool {
         return true;
     }
     false
+}
+
+fn pack_has_spec(args: &[OsString]) -> bool {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--" {
+            return i + 1 < args.len();
+        }
+        if arg.starts_with("--") {
+            let name = long_flag_name(&arg);
+            if pack_flag_takes_value(name) && !arg.contains('=') {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if arg.starts_with('-') && arg.len() > 1 {
+            if arg == "-w" {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+fn pack_flag_takes_value(name: &str) -> bool {
+    matches!(name, "pack-destination" | "registry" | "workspace")
 }
 
 fn has_json_marker(args: &[OsString]) -> bool {
@@ -810,6 +852,50 @@ mod tests {
 
         assert_eq!(plan.target, Target::RealNpm);
         assert_eq!(strings(&plan.args), vec!["ci", "--omit=peer"]);
+    }
+
+    #[test]
+    fn npm_pack_without_spec_uses_aube() {
+        for args in [
+            &["pack"][..],
+            &["pack", "--pack-destination", "dist"][..],
+            &["pack", "-w", "app"][..],
+            &["pack", "--workspace", "app"][..],
+            &["pack", "--registry", "https://registry.npmjs.org"][..],
+            &["pack", "--json"][..],
+            &["pack", "--dry-run", "--ignore-scripts"][..],
+            &["pack", "--"][..],
+        ] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_pack_with_spec_uses_real_npm() {
+        for args in [
+            &["pack", "@isaacs/string-locale-compare@1.1.0"][..],
+            &["pack", "left-pad"][..],
+            &["pack", "--pack-destination", "/tmp", "is-odd@3.0.1"][..],
+            &["pack", "--pack-destination=/tmp", "left-pad"][..],
+            &["pack", "-w", "app", "left-pad"][..],
+            &[
+                "pack",
+                "--registry",
+                "https://registry.npmjs.org",
+                "is-odd@3.0.1",
+            ][..],
+            &["pack", "--dry-run", "./local-dir"][..],
+            &["pack", "--", "left-pad"][..],
+            &["--prefix", "packages/app", "pack", "left-pad"][..],
+        ] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::RealNpm, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
     }
 
     #[test]
