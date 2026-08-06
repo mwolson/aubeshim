@@ -14,17 +14,24 @@ use std::process::{Command as ProcessCommand, ExitStatus};
 const MIN_MISE_VERSION: &str = "2026.5.6";
 
 pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
+    let config = load_config()?;
+    let cwd = env::current_dir().context("could not determine current directory")?;
+
     if is_version_request(args) {
-        let status = if should_runtime_shim()? {
+        let status = if should_shim(&config, &cwd)? {
             run_version(tool, args)?
         } else {
-            run_external_plan(None, real_plan_for(tool, args))?
+            // Passthrough version has no aube linker env.
+            run_external_plan(None, real_plan_for(tool, args), false)?
         };
         std::process::exit(exit_code(status));
     }
 
-    let plan = runtime_plan_for(tool, args)?;
-    let code = run_plan(Some(tool), plan)?;
+    // One config + cwd snapshot for routing and linker env so plan and exec
+    // cannot disagree if the config file changes mid-invocation.
+    let plan = plan_for_config(tool, args, &config, &cwd)?;
+    let force_hoisted = should_hoist(&config, &cwd)?;
+    let code = run_plan(Some(tool), plan, force_hoisted)?;
     std::process::exit(code);
 }
 
@@ -55,17 +62,6 @@ fn run_version(tool: ShimTool, args: &[OsString]) -> Result<ExitStatus> {
 
     Ok(output.status)
 }
-fn runtime_plan_for(tool: ShimTool, args: &[OsString]) -> Result<Plan> {
-    let config = load_config()?;
-    let cwd = env::current_dir().context("could not determine current directory")?;
-    plan_for_config(tool, args, &config, &cwd)
-}
-
-fn should_runtime_shim() -> Result<bool> {
-    let config = load_config()?;
-    let cwd = env::current_dir().context("could not determine current directory")?;
-    should_shim(&config, &cwd)
-}
 
 fn real_plan_for(tool: ShimTool, args: &[OsString]) -> Plan {
     Plan {
@@ -87,28 +83,29 @@ fn real_target_for(tool: ShimTool) -> Target {
     }
 }
 
-fn run_plan(tool: Option<ShimTool>, plan: Plan) -> Result<i32> {
+fn run_plan(tool: Option<ShimTool>, plan: Plan, force_hoisted: bool) -> Result<i32> {
     match plan.target {
         Target::MiseGlobalList => return run_mise_global_list(&plan.args),
         Target::MiseGlobalOutdated => return run_mise_global_outdated(&plan.args),
         _ => {}
     }
 
-    Ok(exit_code(run_external_plan(tool, plan)?))
+    Ok(exit_code(run_external_plan(tool, plan, force_hoisted)?))
 }
 
-fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
+fn run_external_plan(
+    tool: Option<ShimTool>,
+    plan: Plan,
+    force_hoisted: bool,
+) -> Result<ExitStatus> {
     let program = resolve_target(plan.target)?;
     let mut cmd = ProcessCommand::new(&program);
     cmd.args(&plan.args);
 
     if let Some(tool) = tool {
-        if let Some((key, value)) = aube_node_linker_env(
-            tool,
-            plan.target,
-            node_linker_env_is_set(),
-            force_hoisted_node_linker()?,
-        ) {
+        if let Some((key, value)) =
+            aube_node_linker_env(tool, plan.target, node_linker_env_is_set(), force_hoisted)
+        {
             cmd.env(key, value);
         }
         // Script commands can auto-install, so apply the safe default to every Aube-backed plan.
@@ -125,16 +122,6 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
 
     cmd.status()
         .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
-}
-
-fn force_hoisted_node_linker() -> Result<bool> {
-    let cwd = env::current_dir().context("could not determine current directory")?;
-    force_hoisted_node_linker_at(&cwd)
-}
-
-pub(crate) fn force_hoisted_node_linker_at(cwd: &Path) -> Result<bool> {
-    let config = load_config()?;
-    should_hoist(&config, cwd)
 }
 
 fn run_mise_global_list(args: &[OsString]) -> Result<i32> {
@@ -697,29 +684,6 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::globals::test_env_lock;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = env::var_os(key);
-            env::set_var(key, value);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(value) => env::set_var(self.key, value),
-                None => env::remove_var(self.key),
-            }
-        }
-    }
 
     #[test]
     fn npm_aube_plans_default_to_hoisted_node_linker() {
@@ -774,6 +738,8 @@ mod tests {
 
     #[test]
     fn force_hoisted_reads_config_globs_for_cwd() {
+        use crate::config::{parse_config, should_hoist, Config};
+
         let dir = tempfile::tempdir().unwrap();
         let parent = dir.path().join("t3code-parent");
         let t3code = parent.join("t3code");
@@ -783,44 +749,40 @@ mod tests {
         fs::create_dir_all(&trees).unwrap();
         fs::create_dir_all(&tasks).unwrap();
 
-        let config_path = dir.path().join("config.toml");
-        fs::write(
-            &config_path,
-            format!(
+        let config = parse_config(
+            &format!(
                 "hoisted = [\n  \"{}/**\",\n  \"{}/**\",\n]\n",
                 t3code.display(),
                 parent.join("trees").display()
             ),
+            Path::new("/tmp/aubeshim-hoisted-test.toml"),
         )
         .unwrap();
 
-        // Only AUBESHIM_CONFIG is mutated. Avoid set_current_dir / AUBESHIM_AUBE so
-        // parallel planner tests that resolve the auto global backend stay stable.
-        let _lock = test_env_lock::exclusive();
-        let _config = EnvVarGuard::set("AUBESHIM_CONFIG", &config_path.to_string_lossy());
-
-        assert!(force_hoisted_node_linker_at(&t3code.join("apps/mobile")).unwrap());
+        // Mirrors exec_shim: one config snapshot drives both routing and linker env.
+        assert!(should_hoist(&config, &t3code.join("apps/mobile")).unwrap());
         assert_eq!(
             aube_node_linker_env(
                 ShimTool::Pnpm,
                 Target::Aube,
                 false,
-                force_hoisted_node_linker_at(&t3code.join("apps/mobile")).unwrap(),
+                should_hoist(&config, &t3code.join("apps/mobile")).unwrap(),
             ),
             Some(("AUBE_NODE_LINKER", "hoisted"))
         );
-        assert!(force_hoisted_node_linker_at(&trees).unwrap());
-        assert!(!force_hoisted_node_linker_at(&tasks).unwrap());
+        assert!(should_hoist(&config, &trees).unwrap());
+        assert!(!should_hoist(&config, &tasks).unwrap());
         assert_eq!(
             aube_node_linker_env(
                 ShimTool::Pnpm,
                 Target::Aube,
                 false,
-                force_hoisted_node_linker_at(&tasks).unwrap(),
+                should_hoist(&config, &tasks).unwrap(),
             ),
             None
         );
-        assert!(!force_hoisted_node_linker_at(&parent).unwrap());
+        assert!(!should_hoist(&config, &parent).unwrap());
+        assert!(!should_hoist(&Config::default(), &t3code).unwrap());
     }
 
     #[test]
