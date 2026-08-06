@@ -41,8 +41,11 @@ dependencies before reaching for a hoisted linker setting.
 
 Use a hoisted linker profile as a compatibility fallback for projects whose
 dependency trees are too messy to clean up quickly, especially Expo or React
-Native apps. Keep `aube.allowBuilds` separate from linker decisions: it handles
-lifecycle script approval, while hoisting handles module resolution shape.
+Native apps. Prefer the aubeshim `hoisted` config globs so every package-manager
+shim (not just npm) injects `AUBE_NODE_LINKER=hoisted` for matching trees. Keep
+`aube.allowBuilds` separate from linker decisions: it handles lifecycle script
+approval, while hoisting handles module resolution shape. Switching an existing
+isolated install to hoisted usually needs a clean reinstall.
 
 Treat lockfile ownership as a separate compatibility question. A hoisted aube
 install can make a local project work while still writing a `package-lock.json`

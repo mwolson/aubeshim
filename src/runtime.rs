@@ -1,4 +1,4 @@
-use crate::config::{load_config, should_shim};
+use crate::config::{load_config, should_hoist, should_shim};
 use crate::home_dir;
 use crate::planner::{plan_for_config, Plan, Target};
 use crate::shims::{default_shim_dir, is_executable_file, ShimTool};
@@ -103,9 +103,12 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
     cmd.args(&plan.args);
 
     if let Some(tool) = tool {
-        if let Some((key, value)) =
-            npm_compat_node_linker_env(tool, plan.target, node_linker_env_is_set())
-        {
+        if let Some((key, value)) = aube_node_linker_env(
+            tool,
+            plan.target,
+            node_linker_env_is_set(),
+            force_hoisted_node_linker()?,
+        ) {
             cmd.env(key, value);
         }
         // Script commands can auto-install, so apply the safe default to every Aube-backed plan.
@@ -122,6 +125,12 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
 
     cmd.status()
         .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
+}
+
+fn force_hoisted_node_linker() -> Result<bool> {
+    let config = load_config()?;
+    let cwd = env::current_dir().context("could not determine current directory")?;
+    should_hoist(&config, &cwd)
 }
 
 fn run_mise_global_list(args: &[OsString]) -> Result<i32> {
@@ -220,12 +229,24 @@ fn has_json_arg(args: &[OsString]) -> bool {
     args.iter().any(|arg| arg == "--json")
 }
 
-pub(crate) fn npm_compat_node_linker_env(
+pub(crate) fn aube_node_linker_env(
     tool: ShimTool,
     target: Target,
     explicit_node_linker_env: bool,
+    force_hoisted: bool,
 ) -> Option<(&'static str, &'static str)> {
-    if tool == ShimTool::Npm && target == Target::Aube && !explicit_node_linker_env {
+    if target != Target::Aube || explicit_node_linker_env {
+        return None;
+    }
+    if !matches!(
+        tool,
+        ShimTool::Bun | ShimTool::Npm | ShimTool::Pnpm | ShimTool::Yarn
+    ) {
+        return None;
+    }
+    // npm defaults to hoisted for aube-backed plans. Other package managers only
+    // hoist when the cwd matches a configured `hoisted` directory glob.
+    if tool == ShimTool::Npm || force_hoisted {
         return Some(("AUBE_NODE_LINKER", "hoisted"));
     }
     None
@@ -672,6 +693,57 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npm_aube_plans_default_to_hoisted_node_linker() {
+        assert_eq!(
+            aube_node_linker_env(ShimTool::Npm, Target::Aube, false, false),
+            Some(("AUBE_NODE_LINKER", "hoisted"))
+        );
+        assert_eq!(
+            aube_node_linker_env(ShimTool::Npm, Target::Aube, true, false),
+            None
+        );
+        assert_eq!(
+            aube_node_linker_env(ShimTool::Npm, Target::RealNpm, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn pattern_hoist_applies_to_all_package_manager_shims() {
+        for tool in [ShimTool::Bun, ShimTool::Npm, ShimTool::Pnpm, ShimTool::Yarn] {
+            assert_eq!(
+                aube_node_linker_env(tool, Target::Aube, false, true),
+                Some(("AUBE_NODE_LINKER", "hoisted"))
+            );
+            assert_eq!(aube_node_linker_env(tool, Target::Aube, true, true), None);
+        }
+    }
+
+    #[test]
+    fn non_npm_tools_keep_default_linker_without_pattern() {
+        for tool in [ShimTool::Bun, ShimTool::Pnpm, ShimTool::Yarn] {
+            assert_eq!(aube_node_linker_env(tool, Target::Aube, false, false), None);
+        }
+    }
+
+    #[test]
+    fn runner_shims_and_real_targets_skip_node_linker_env() {
+        for (tool, target, force_hoisted) in [
+            (ShimTool::Npx, Target::Aube, true),
+            (ShimTool::Pnpx, Target::Aube, true),
+            (ShimTool::Pnx, Target::Aube, true),
+            (ShimTool::Bunx, Target::Aube, true),
+            (ShimTool::Pnpm, Target::RealPnpm, true),
+            (ShimTool::Yarn, Target::RealYarn, true),
+        ] {
+            assert_eq!(
+                aube_node_linker_env(tool, target, false, force_hoisted),
+                None
+            );
+        }
+    }
 
     #[test]
     fn shimmed_package_managers_default_to_safe_imports() {

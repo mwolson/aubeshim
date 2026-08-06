@@ -12,6 +12,7 @@ pub struct Config {
     pub enabled: bool,
     pub default: bool,
     pub global_packages: GlobalPackages,
+    pub hoisted: Vec<String>,
     pub ignore: Vec<String>,
     pub shim: Vec<String>,
 }
@@ -30,6 +31,7 @@ impl Default for Config {
             enabled: true,
             default: true,
             global_packages: GlobalPackages::Auto,
+            hoisted: Vec::new(),
             ignore: Vec::new(),
             shim: Vec::new(),
         }
@@ -66,10 +68,19 @@ pub(crate) fn parse_config(content: &str, path: &Path) -> Result<Config> {
 }
 
 fn validate_config(config: &Config) -> Result<()> {
-    for pattern in config.ignore.iter().chain(config.shim.iter()) {
+    for pattern in config
+        .hoisted
+        .iter()
+        .chain(config.ignore.iter())
+        .chain(config.shim.iter())
+    {
         compile_dir_glob(pattern)?;
     }
     Ok(())
+}
+
+pub(crate) fn should_hoist(config: &Config, cwd: &Path) -> Result<bool> {
+    matches_dir_glob(&config.hoisted, cwd)
 }
 
 pub(crate) fn should_shim(config: &Config, cwd: &Path) -> Result<bool> {
@@ -172,5 +183,18 @@ mod tests {
         let cwd = home_dir().join("devel/alairo");
 
         assert!(matches_dir_glob_pattern("~/devel/alairo/**", &cwd).unwrap());
+    }
+
+    #[test]
+    fn should_hoist_matches_configured_globs() {
+        let root = home_dir().join("devel/projects/t3code-parent");
+        let cwd = root.join("trees/orchestrator-v2.1/apps/mobile");
+        let config = Config {
+            hoisted: vec!["~/devel/projects/t3code-parent/**".to_owned()],
+            ..Config::default()
+        };
+
+        assert!(should_hoist(&config, &cwd).unwrap());
+        assert!(!should_hoist(&Config::default(), &cwd).unwrap());
     }
 }

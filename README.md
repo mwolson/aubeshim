@@ -127,6 +127,10 @@ enabled = true
 default = true
 global_packages = "auto"
 
+hoisted = [
+  "~/devel/projects/t3code-parent/**",
+]
+
 ignore = [
   "~/devel/work/broken-expo",
   "~/devel/work/legacy/**",
@@ -151,6 +155,16 @@ such as `npm install -g prettier` run through `mise use -g npm:prettier`,
 letting mise manage tool inventory and PATH exposure. With `"aube"`, they run
 through `aube add -g prettier` or `aube remove -g prettier`; make sure aube's
 global bin dir, such as the path printed by `aube bin -g`, is on `PATH`.
+
+`hoisted` is a list of directory globs that force aube's hoisted node linker
+(`AUBE_NODE_LINKER=hoisted`) for aube-backed `bun`, `npm`, `pnpm`, and `yarn`
+commands in matching trees. Use this for projects that need an npm-style
+`node_modules` layout, such as Expo or React Native apps that fail under aube's
+default isolated layout. It does not change whether a directory is shimmed; use
+`ignore` / `shim` / `default` for that. Explicit `AUBE_NODE_LINKER`,
+`NPM_CONFIG_NODE_LINKER`, or `npm_config_node_linker` environment variables
+still win. Passthrough plans that run the real package manager never set the
+linker env.
 
 `ignore` is a list of directory globs that should pass through to the real
 package manager. `shim` is a list of directory globs that should use `aube`.
@@ -242,6 +256,9 @@ configured value for one shell session or command with
 - npm-shimmed `aube` commands set `AUBE_NODE_LINKER=hoisted` for that invocation
   unless a node-linker env var is already set. This matches npm's hoisted
   `node_modules` shape without writing `.npmrc`.
+- Aube-backed `bun`, `pnpm`, and `yarn` commands also set
+  `AUBE_NODE_LINKER=hoisted` when the current directory matches a `hoisted`
+  config glob, unless a node-linker env var is already set.
 - Aube-backed `bun`, `npm`, `pnpm`, and `yarn` commands default to
   `packageImportMethod=clone-or-copy`. This keeps lifecycle scripts and tools
   that edit `node_modules` from modifying Aube's shared store. Explicit CLI,

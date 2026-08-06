@@ -29,8 +29,8 @@ mod tests {
     use super::*;
     use crate::config::parse_config;
     use crate::runtime::{
-        compare_dotted_versions, mise_version_from_output, missing_tool_error,
-        npm_compat_node_linker_env, unsupported_mise_error, version_from_output,
+        aube_node_linker_env, compare_dotted_versions, mise_version_from_output,
+        missing_tool_error, unsupported_mise_error, version_from_output,
     };
     use std::{cmp::Ordering, env, ffi::OsString, fs, path::Path};
 
@@ -186,6 +186,7 @@ mod tests {
             enabled: true,
             default: true,
             global_packages: GlobalPackages::Mise,
+            hoisted: Vec::new(),
             ignore: vec![pattern.clone()],
             shim: vec![pattern],
         };
@@ -262,6 +263,7 @@ mod tests {
 enabled = false
 default = true
 global_packages = "aube"
+hoisted = ["~/devel/projects/t3code-parent/**"]
 ignore = ["~/devel/work/broken-expo"]
 shim = ["~/devel/work/*"]
 "#,
@@ -272,6 +274,10 @@ shim = ["~/devel/work/*"]
         assert!(!config.enabled);
         assert!(config.default);
         assert_eq!(config.global_packages, GlobalPackages::Aube);
+        assert_eq!(
+            config.hoisted,
+            vec!["~/devel/projects/t3code-parent/**".to_owned()]
+        );
     }
 
     #[test]
@@ -428,19 +434,23 @@ shim = ["~/devel/work/*"]
     #[test]
     fn npm_aube_plans_default_to_hoisted_node_linker() {
         assert_eq!(
-            npm_compat_node_linker_env(ShimTool::Npm, Target::Aube, false),
+            aube_node_linker_env(ShimTool::Npm, Target::Aube, false, false),
             Some(("AUBE_NODE_LINKER", "hoisted"))
         );
         assert_eq!(
-            npm_compat_node_linker_env(ShimTool::Npm, Target::Aube, true),
+            aube_node_linker_env(ShimTool::Npm, Target::Aube, true, false),
             None
         );
         assert_eq!(
-            npm_compat_node_linker_env(ShimTool::Pnpm, Target::Aube, false),
+            aube_node_linker_env(ShimTool::Pnpm, Target::Aube, false, false),
             None
         );
         assert_eq!(
-            npm_compat_node_linker_env(ShimTool::Npm, Target::RealNpm, false),
+            aube_node_linker_env(ShimTool::Pnpm, Target::Aube, false, true),
+            Some(("AUBE_NODE_LINKER", "hoisted"))
+        );
+        assert_eq!(
+            aube_node_linker_env(ShimTool::Npm, Target::RealNpm, false, true),
             None
         );
     }
