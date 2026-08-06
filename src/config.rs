@@ -186,15 +186,38 @@ mod tests {
     }
 
     #[test]
-    fn should_hoist_matches_configured_globs() {
-        let root = home_dir().join("devel/projects/t3code-parent");
-        let cwd = root.join("trees/orchestrator-v2.1/apps/mobile");
+    fn should_hoist_matches_precise_checkout_globs() {
+        let parent = home_dir().join("devel/projects/t3code-parent");
         let config = Config {
-            hoisted: vec!["~/devel/projects/t3code-parent/**".to_owned()],
+            hoisted: vec![
+                "~/devel/projects/t3code-parent/t3code/**".to_owned(),
+                "~/devel/projects/t3code-parent/trees/**".to_owned(),
+            ],
             ..Config::default()
         };
 
-        assert!(should_hoist(&config, &cwd).unwrap());
-        assert!(!should_hoist(&Config::default(), &cwd).unwrap());
+        assert!(should_hoist(&config, &parent.join("t3code")).unwrap());
+        assert!(should_hoist(&config, &parent.join("t3code/apps/mobile")).unwrap());
+        assert!(
+            should_hoist(&config, &parent.join("trees/orchestrator-v2.1/apps/mobile")).unwrap()
+        );
+        assert!(!should_hoist(&config, &parent).unwrap());
+        assert!(!should_hoist(&config, &parent.join("tasks/foo")).unwrap());
+        assert!(!should_hoist(&config, &parent.join("notes")).unwrap());
+        assert!(!should_hoist(&Config::default(), &parent.join("t3code")).unwrap());
+    }
+
+    #[test]
+    fn rejects_invalid_hoisted_globs() {
+        let err = parse_config(
+            r#"hoisted = ["["]"#,
+            Path::new("/tmp/aubeshim-invalid-hoisted.toml"),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("invalid dir glob"),
+            "unexpected error: {err}"
+        );
     }
 }

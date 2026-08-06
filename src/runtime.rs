@@ -128,9 +128,13 @@ fn run_external_plan(tool: Option<ShimTool>, plan: Plan) -> Result<ExitStatus> {
 }
 
 fn force_hoisted_node_linker() -> Result<bool> {
-    let config = load_config()?;
     let cwd = env::current_dir().context("could not determine current directory")?;
-    should_hoist(&config, &cwd)
+    force_hoisted_node_linker_at(&cwd)
+}
+
+pub(crate) fn force_hoisted_node_linker_at(cwd: &Path) -> Result<bool> {
+    let config = load_config()?;
+    should_hoist(&config, cwd)
 }
 
 fn run_mise_global_list(args: &[OsString]) -> Result<i32> {
@@ -693,6 +697,29 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::globals::test_env_lock;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = env::var_os(key);
+            env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     #[test]
     fn npm_aube_plans_default_to_hoisted_node_linker() {
@@ -743,6 +770,57 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn force_hoisted_reads_config_globs_for_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("t3code-parent");
+        let t3code = parent.join("t3code");
+        let trees = parent.join("trees/feature-branch");
+        let tasks = parent.join("tasks/foo");
+        fs::create_dir_all(t3code.join("apps/mobile")).unwrap();
+        fs::create_dir_all(&trees).unwrap();
+        fs::create_dir_all(&tasks).unwrap();
+
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "hoisted = [\n  \"{}/**\",\n  \"{}/**\",\n]\n",
+                t3code.display(),
+                parent.join("trees").display()
+            ),
+        )
+        .unwrap();
+
+        // Only AUBESHIM_CONFIG is mutated. Avoid set_current_dir / AUBESHIM_AUBE so
+        // parallel planner tests that resolve the auto global backend stay stable.
+        let _lock = test_env_lock::exclusive();
+        let _config = EnvVarGuard::set("AUBESHIM_CONFIG", &config_path.to_string_lossy());
+
+        assert!(force_hoisted_node_linker_at(&t3code.join("apps/mobile")).unwrap());
+        assert_eq!(
+            aube_node_linker_env(
+                ShimTool::Pnpm,
+                Target::Aube,
+                false,
+                force_hoisted_node_linker_at(&t3code.join("apps/mobile")).unwrap(),
+            ),
+            Some(("AUBE_NODE_LINKER", "hoisted"))
+        );
+        assert!(force_hoisted_node_linker_at(&trees).unwrap());
+        assert!(!force_hoisted_node_linker_at(&tasks).unwrap());
+        assert_eq!(
+            aube_node_linker_env(
+                ShimTool::Pnpm,
+                Target::Aube,
+                false,
+                force_hoisted_node_linker_at(&tasks).unwrap(),
+            ),
+            None
+        );
+        assert!(!force_hoisted_node_linker_at(&parent).unwrap());
     }
 
     #[test]

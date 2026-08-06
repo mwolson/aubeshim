@@ -263,7 +263,10 @@ mod tests {
 enabled = false
 default = true
 global_packages = "aube"
-hoisted = ["~/devel/projects/t3code-parent/**"]
+hoisted = [
+  "~/devel/projects/t3code-parent/t3code/**",
+  "~/devel/projects/t3code-parent/trees/**",
+]
 ignore = ["~/devel/work/broken-expo"]
 shim = ["~/devel/work/*"]
 "#,
@@ -276,7 +279,10 @@ shim = ["~/devel/work/*"]
         assert_eq!(config.global_packages, GlobalPackages::Aube);
         assert_eq!(
             config.hoisted,
-            vec!["~/devel/projects/t3code-parent/**".to_owned()]
+            vec![
+                "~/devel/projects/t3code-parent/t3code/**".to_owned(),
+                "~/devel/projects/t3code-parent/trees/**".to_owned(),
+            ]
         );
     }
 

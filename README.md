@@ -128,7 +128,8 @@ default = true
 global_packages = "auto"
 
 hoisted = [
-  "~/devel/projects/t3code-parent/**",
+  "~/devel/projects/t3code-parent/t3code/**",
+  "~/devel/projects/t3code-parent/trees/**",
 ]
 
 ignore = [
