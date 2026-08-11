@@ -496,7 +496,9 @@ fn resolve_real_npm() -> Result<Option<OsString>> {
     }
 
     if let Some(path) = mise_which("npm")? {
-        return Ok(Some(path));
+        if is_acceptable_real_tool(Path::new(&path)) {
+            return Ok(Some(path));
+        }
     }
 
     Ok(path_which_excluding_shims("npm"))
@@ -532,7 +534,11 @@ fn resolve_tool(
     }
 
     if let Some(path) = mise_which(tool)? {
-        return Ok(Some(path));
+        // mise which normally returns a real install path. Reject dispatcher
+        // shims if a broken or recursive setup points back into aubeshim/mise.
+        if is_acceptable_real_tool(Path::new(&path)) {
+            return Ok(Some(path));
+        }
     }
 
     Ok(path_lookup(tool))
@@ -648,11 +654,67 @@ fn command_on_path(name: &str) -> bool {
     path_which(name).is_some()
 }
 
+/// Locate a real package manager on PATH, skipping dispatcher shim directories.
+///
+/// Aubeshim's own shims and mise's shims both re-enter tool resolution. If
+/// `mise which` fails and PATH falls back to either of those, aubeshim can
+/// recurse forever (aubeshim -> mise shim -> aubeshim). Prefer a real install
+/// path, or fail closed with no candidate.
 fn path_which_excluding_shims(name: &str) -> Option<OsString> {
-    let shim_dir = default_shim_dir();
+    let aubeshim_shim_dir = default_shim_dir();
+    let mise_shim_dir = default_mise_shim_dir();
     path_which_with_filter(name, |candidate| {
-        candidate.parent() != Some(shim_dir.as_path())
+        is_acceptable_real_tool_in_dirs(candidate, &aubeshim_shim_dir, &mise_shim_dir)
     })
+}
+
+fn default_mise_shim_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("MISE_DATA_DIR") {
+        return PathBuf::from(dir).join("shims");
+    }
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
+        return PathBuf::from(data_home).join("mise").join("shims");
+    }
+    home_dir().join(".local/share/mise/shims")
+}
+
+fn is_acceptable_real_tool(path: &Path) -> bool {
+    is_acceptable_real_tool_in_dirs(path, &default_shim_dir(), &default_mise_shim_dir())
+}
+
+fn is_acceptable_real_tool_in_dirs(
+    path: &Path,
+    aubeshim_shim_dir: &Path,
+    mise_shim_dir: &Path,
+) -> bool {
+    if let Some(parent) = path.parent() {
+        if paths_refer_to_same_dir(parent, aubeshim_shim_dir)
+            || paths_refer_to_same_dir(parent, mise_shim_dir)
+        {
+            return false;
+        }
+    }
+    !is_current_aubeshim_executable(path)
+}
+
+fn paths_refer_to_same_dir(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn is_current_aubeshim_executable(path: &Path) -> bool {
+    let Ok(current) = env::current_exe() else {
+        return false;
+    };
+    match (fs::canonicalize(path), fs::canonicalize(current)) {
+        (Ok(candidate), Ok(current)) => candidate == current,
+        _ => false,
+    }
 }
 
 fn path_which_with_filter(name: &str, keep: impl Fn(&Path) -> bool) -> Option<OsString> {
@@ -950,5 +1012,236 @@ mod tests {
         .unwrap();
 
         assert!(project_declares_package_import_method(&root));
+    }
+
+    /// Package-manager names that can pass through to a real binary.
+    const REAL_TOOL_NAMES: &[&str] = &["bun", "bunx", "npm", "npx", "pnpm", "pnpx", "pnx", "yarn"];
+
+    struct EnvSnapshot {
+        previous: Vec<(&'static str, Option<OsString>)>,
+        _lock: std::sync::RwLockWriteGuard<'static, ()>,
+    }
+
+    impl EnvSnapshot {
+        fn apply(pairs: &[(&'static str, Option<&str>)]) -> Self {
+            let lock = crate::globals::test_env_lock::exclusive();
+            let mut previous = Vec::with_capacity(pairs.len());
+            for &(key, value) in pairs {
+                previous.push((key, env::var_os(key)));
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (key, value) in self.previous.iter().rev() {
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    fn write_executable(path: &Path) {
+        fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).unwrap();
+        }
+    }
+
+    fn dispatcher_only_path_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let aubeshim_shims = dir.path().join("aubeshim-shims");
+        let mise_data = dir.path().join("mise-data");
+        let mise_shims = mise_data.join("shims");
+        fs::create_dir_all(&aubeshim_shims).unwrap();
+        fs::create_dir_all(&mise_shims).unwrap();
+
+        for name in REAL_TOOL_NAMES {
+            write_executable(&aubeshim_shims.join(name));
+            write_executable(&mise_shims.join(name));
+        }
+
+        (dir, aubeshim_shims, mise_data)
+    }
+
+    /// Isolate resolver tests from the host environment.
+    ///
+    /// PATH is fully replaced (so `mise which` cannot run) and every real-tool
+    /// override is cleared unless an extra pair overrides it.
+    fn isolated_resolver_env(
+        aubeshim_shims: &Path,
+        mise_data: &Path,
+        path: &std::ffi::OsStr,
+        extra: &[(&'static str, Option<&str>)],
+    ) -> EnvSnapshot {
+        let path = path.to_str().expect("test PATH must be UTF-8");
+        let mut pairs = vec![
+            ("AUBESHIM_SHIM_DIR", Some(aubeshim_shims.to_str().unwrap())),
+            ("MISE_DATA_DIR", Some(mise_data.to_str().unwrap())),
+            ("PATH", Some(path)),
+            ("AUBESHIM_REAL_BUN", None),
+            ("AUBESHIM_REAL_BUNX", None),
+            ("AUBESHIM_REAL_NPM", None),
+            ("AUBE_NPM_PATH", None),
+            ("NPM_CONFIG_NPM_PATH", None),
+            ("AUBESHIM_REAL_NPX", None),
+            ("AUBESHIM_REAL_PNPM", None),
+            ("AUBESHIM_REAL_PNPX", None),
+            ("AUBESHIM_REAL_PNX", None),
+            ("AUBESHIM_REAL_YARN", None),
+        ];
+        for &(key, value) in extra {
+            if let Some(slot) = pairs.iter_mut().find(|(existing, _)| *existing == key) {
+                *slot = (key, value);
+            } else {
+                pairs.push((key, value));
+            }
+        }
+        EnvSnapshot::apply(&pairs)
+    }
+
+    #[test]
+    fn path_lookup_skips_aubeshim_and_mise_dispatcher_shims() {
+        let (_dir, aubeshim_shims, mise_data) = dispatcher_only_path_fixture();
+        let mise_shims = mise_data.join("shims");
+        let path = env::join_paths([&aubeshim_shims, &mise_shims]).unwrap();
+        let _env = isolated_resolver_env(&aubeshim_shims, &mise_data, &path, &[]);
+
+        for name in REAL_TOOL_NAMES {
+            assert_eq!(
+                path_which_excluding_shims(name),
+                None,
+                "expected no real {name} when PATH only has dispatcher shims"
+            );
+        }
+
+        assert!(resolve_real_bun().unwrap().is_none());
+        assert!(resolve_real_bunx().unwrap().is_none());
+        assert!(resolve_real_npm().unwrap().is_none());
+        assert!(resolve_real_npx().unwrap().is_none());
+        assert!(resolve_real_pnpm().unwrap().is_none());
+        assert!(resolve_real_pnpx().unwrap().is_none());
+        assert!(resolve_real_pnx().unwrap().is_none());
+        assert!(resolve_real_yarn().unwrap().is_none());
+    }
+
+    #[test]
+    fn path_lookup_finds_real_binary_after_dispatcher_shims() {
+        let (dir, aubeshim_shims, mise_data) = dispatcher_only_path_fixture();
+        let mise_shims = mise_data.join("shims");
+        let real_dir = dir.path().join("real");
+        fs::create_dir_all(&real_dir).unwrap();
+        for name in REAL_TOOL_NAMES {
+            write_executable(&real_dir.join(name));
+        }
+
+        let path = env::join_paths([&aubeshim_shims, &mise_shims, &real_dir]).unwrap();
+        let _env = isolated_resolver_env(&aubeshim_shims, &mise_data, &path, &[]);
+
+        for name in REAL_TOOL_NAMES {
+            let found = path_which_excluding_shims(name).unwrap_or_else(|| {
+                panic!("expected real {name} after dispatcher shims on PATH");
+            });
+            assert_eq!(Path::new(&found), real_dir.join(name));
+        }
+
+        assert_eq!(
+            resolve_real_bun().unwrap().as_deref(),
+            Some(real_dir.join("bun").as_os_str())
+        );
+        assert_eq!(
+            resolve_real_npm().unwrap().as_deref(),
+            Some(real_dir.join("npm").as_os_str())
+        );
+        assert_eq!(
+            resolve_real_pnpm().unwrap().as_deref(),
+            Some(real_dir.join("pnpm").as_os_str())
+        );
+        assert_eq!(
+            resolve_real_yarn().unwrap().as_deref(),
+            Some(real_dir.join("yarn").as_os_str())
+        );
+    }
+
+    #[test]
+    fn real_tool_env_override_still_wins() {
+        let (_dir, aubeshim_shims, mise_data) = dispatcher_only_path_fixture();
+        let mise_shims = mise_data.join("shims");
+        let path = env::join_paths([&aubeshim_shims, &mise_shims]).unwrap();
+        let override_bun = aubeshim_shims.join("not-used-override");
+        write_executable(&override_bun);
+
+        let _env = isolated_resolver_env(
+            &aubeshim_shims,
+            &mise_data,
+            &path,
+            &[("AUBESHIM_REAL_BUN", Some(override_bun.to_str().unwrap()))],
+        );
+
+        assert_eq!(
+            resolve_real_bun().unwrap().as_deref(),
+            Some(override_bun.as_os_str())
+        );
+    }
+
+    #[test]
+    fn rejects_dispatcher_shim_paths_as_real_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let aubeshim_shims = dir.path().join("aubeshim-shims");
+        let mise_data = dir.path().join("mise-data");
+        let mise_shims = mise_data.join("shims");
+        fs::create_dir_all(&aubeshim_shims).unwrap();
+        fs::create_dir_all(&mise_shims).unwrap();
+        write_executable(&mise_shims.join("bun"));
+        write_executable(&aubeshim_shims.join("bun"));
+
+        let path = env::join_paths([&aubeshim_shims, &mise_shims]).unwrap();
+        let _env = isolated_resolver_env(&aubeshim_shims, &mise_data, &path, &[]);
+
+        assert!(!is_acceptable_real_tool(&mise_shims.join("bun")));
+        assert!(!is_acceptable_real_tool(&aubeshim_shims.join("bun")));
+    }
+
+    #[test]
+    fn resolve_real_tool_fails_closed_when_only_dispatcher_shims_exist() {
+        let (_dir, aubeshim_shims, mise_data) = dispatcher_only_path_fixture();
+        let mise_shims = mise_data.join("shims");
+        let path = env::join_paths([&aubeshim_shims, &mise_shims]).unwrap();
+        let _env = isolated_resolver_env(&aubeshim_shims, &mise_data, &path, &[]);
+
+        for tool in [
+            ShimTool::Bun,
+            ShimTool::Bunx,
+            ShimTool::Npm,
+            ShimTool::Npx,
+            ShimTool::Pnpm,
+            ShimTool::Pnpx,
+            ShimTool::Pnx,
+            ShimTool::Yarn,
+        ] {
+            let err = resolve_real_tool(tool).unwrap_err().to_string();
+            assert!(
+                err.contains("could not find real"),
+                "tool {tool:?} should fail closed, got: {err}"
+            );
+            assert!(
+                err.contains("AUBESHIM_REAL_"),
+                "tool {tool:?} error should mention override env, got: {err}"
+            );
+        }
     }
 }

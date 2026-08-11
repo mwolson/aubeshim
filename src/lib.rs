@@ -671,7 +671,12 @@ shim = ["~/devel/work/*"]
         if shell == "fish" {
             cmd.arg("--no-config");
         }
-        cmd.arg("-c").arg(script).env("PATH", path);
+        // Force PATH and clear AUBESHIM_SHIM_DIR so concurrent resolver tests that
+        // mutate those process env vars cannot change sh activation output.
+        cmd.arg("-c")
+            .arg(script)
+            .env("PATH", path)
+            .env_remove("AUBESHIM_SHIM_DIR");
         if shell == "zsh" {
             cmd.env("ZDOTDIR", zdotdir.path());
         }
