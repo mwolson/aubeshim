@@ -294,15 +294,28 @@ fn skip_install_layout_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
         return None;
     }
 
-    if arg == "--legacy-bundling" || arg == "--global-style" {
+    if arg == "--legacy-bundling"
+        || arg == "--global-style"
+        || arg == "--legacy-peer-deps"
+        || arg == "--strict-peer-deps"
+    {
         return None;
     }
-    if arg == "--no-legacy-bundling" || arg == "--no-global-style" {
+    if arg == "--no-legacy-bundling"
+        || arg == "--no-global-style"
+        || arg == "--no-legacy-peer-deps"
+        || arg == "--no-strict-peer-deps"
+    {
         *i += 1;
         return Some(true);
     }
 
-    for name in ["legacy-bundling", "global-style"] {
+    for name in [
+        "legacy-bundling",
+        "global-style",
+        "legacy-peer-deps",
+        "strict-peer-deps",
+    ] {
         if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
             if value.eq_ignore_ascii_case("false") {
                 *i += 1;
@@ -843,6 +856,59 @@ mod tests {
 
             assert_eq!(plan.target, Target::RealNpm);
             assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_install_peer_resolution_flags_use_real_npm() {
+        for args in [
+            &["install", "--legacy-peer-deps"][..],
+            &["ci", "--strict-peer-deps"][..],
+            &["install", "--legacy-peer-deps=true", "react"][..],
+            &["--legacy-peer-deps", "install", "react"][..],
+            &[
+                "install",
+                "@mwolson-org/pi-xai-ws@latest",
+                "--prefix",
+                "/tmp/pi-extensions",
+                "--legacy-peer-deps",
+            ][..],
+        ] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::RealNpm, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_install_disabled_peer_resolution_flags_stay_on_aube() {
+        for (args, expected) in [
+            (&["install", "--no-legacy-peer-deps"][..], vec!["install"]),
+            (&["install", "--no-strict-peer-deps"][..], vec!["install"]),
+            (
+                &["install", "--legacy-peer-deps=false", "react"][..],
+                vec!["add", "react"],
+            ),
+            (
+                &["install", "--strict-peer-deps=false", "react"][..],
+                vec!["add", "react"],
+            ),
+            (
+                &[
+                    "install",
+                    "react",
+                    "--prefix",
+                    "packages/app",
+                    "--no-legacy-peer-deps",
+                ][..],
+                vec!["add", "react", "--prefix", "packages/app"],
+            ),
+        ] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), expected);
         }
     }
 

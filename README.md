@@ -300,13 +300,17 @@ Global package commands route through `global_packages`, which defaults to
 - Set `global_packages = "mise"` or `"aube"` to force a backend, or override for
   one session with `AUBESHIM_GLOBAL_PACKAGES_BACKEND`.
 
-Commands that need npm's exact registry or account behavior fall back to the
-real npm:
+Commands that need npm's exact registry, account, or peer-resolution behavior
+fall back to the real npm:
 
 - `npm view`, `npm show`, and `npm info` with `--json` fall back so tools such
   as mise can consume npm's registry metadata format.
 - `npm publish` and `npm unpublish` fall back to preserve npm's registry, auth,
   access, provenance, OTP, tag, workspace, and lifecycle semantics.
+- `npm install --legacy-peer-deps` and `npm install --strict-peer-deps` fall
+  back because aube rejects those flags and does not implement npm's legacy or
+  strict peer-resolution modes. The disabled forms (`--no-legacy-peer-deps`,
+  `--strict-peer-deps=false`) are dropped so the install can stay on aube.
 - npm-only commands such as `npm pkg`, `npm search`, and `npm whoami` fall back
   to the real npm.
 
