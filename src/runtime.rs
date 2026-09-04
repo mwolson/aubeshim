@@ -108,6 +108,11 @@ fn run_external_plan(
         {
             cmd.env(key, value);
         }
+        if let Some((key, value)) =
+            npm_minimum_package_age_env(tool, plan.target, minimum_package_age_env_is_set())
+        {
+            cmd.env(key, value);
+        }
         // Script commands can auto-install, so apply the safe default to every Aube-backed plan.
         if safe_package_import_method_env(tool, plan.target, false).is_some() {
             if let Some((key, value)) = safe_package_import_method_env(
@@ -247,6 +252,23 @@ fn node_linker_env_is_set() -> bool {
     env::var_os("AUBE_NODE_LINKER").is_some()
         || env::var_os("NPM_CONFIG_NODE_LINKER").is_some()
         || env::var_os("npm_config_node_linker").is_some()
+}
+
+pub(crate) fn npm_minimum_package_age_env(
+    tool: ShimTool,
+    target: Target,
+    explicit_minimum_package_age_env: bool,
+) -> Option<(&'static str, &'static str)> {
+    if explicit_minimum_package_age_env || tool != ShimTool::Npm || target != Target::Aube {
+        return None;
+    }
+    Some(("AUBE_MINIMUM_PACKAGE_AGE", "0"))
+}
+
+fn minimum_package_age_env_is_set() -> bool {
+    env::var_os("AUBE_MINIMUM_PACKAGE_AGE").is_some()
+        || env::var_os("NPM_CONFIG_MINIMUM_PACKAGE_AGE").is_some()
+        || env::var_os("npm_config_minimum_package_age").is_some()
 }
 
 pub(crate) fn safe_package_import_method_env(
@@ -761,6 +783,25 @@ mod tests {
             aube_node_linker_env(ShimTool::Npm, Target::RealNpm, false, false),
             None
         );
+    }
+
+    #[test]
+    fn npm_aube_plans_disable_minimum_package_age() {
+        assert_eq!(
+            npm_minimum_package_age_env(ShimTool::Npm, Target::Aube, false),
+            Some(("AUBE_MINIMUM_PACKAGE_AGE", "0"))
+        );
+        assert_eq!(
+            npm_minimum_package_age_env(ShimTool::Npm, Target::Aube, true),
+            None
+        );
+        assert_eq!(
+            npm_minimum_package_age_env(ShimTool::Npm, Target::RealNpm, false),
+            None
+        );
+        for tool in [ShimTool::Bun, ShimTool::Pnpm, ShimTool::Yarn] {
+            assert_eq!(npm_minimum_package_age_env(tool, Target::Aube, false), None);
+        }
     }
 
     #[test]

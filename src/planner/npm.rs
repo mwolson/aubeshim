@@ -116,7 +116,7 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
             }
         }
     } else {
-        prefix.to_vec()
+        map_legacy_peer_deps_args(prefix)
     };
     out.extend(translated_prefix);
     out.push(OsString::from(normalize_command(&command)));
@@ -129,7 +129,7 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
         };
         out.extend(translated);
     } else {
-        out.extend_from_slice(rest);
+        out.extend(map_legacy_peer_deps_args(rest));
     }
     Plan {
         target: Target::Aube,
@@ -217,13 +217,71 @@ fn has_json_marker(args: &[OsString]) -> bool {
     })
 }
 
-fn translate_install_package_args(args: &[OsString]) -> Option<Vec<OsString>> {
-    let mut out = Vec::with_capacity(args.len());
+const AUTO_INSTALL_PEERS_FALSE: &str = "--config.auto-install-peers=false";
+
+fn is_enabled_legacy_peer_deps_flag(arg: &str) -> bool {
+    arg == "--legacy-peer-deps" || arg.eq_ignore_ascii_case("--legacy-peer-deps=true")
+}
+
+fn is_dropped_legacy_peer_deps_flag(arg: &str) -> bool {
+    is_enabled_legacy_peer_deps_flag(arg)
+        || arg == "--no-legacy-peer-deps"
+        || arg.eq_ignore_ascii_case("--legacy-peer-deps=false")
+}
+
+fn args_have_enabled_legacy_peer_deps(args: &[OsString]) -> bool {
+    for arg in args {
+        if arg == "--" {
+            break;
+        }
+        if is_enabled_legacy_peer_deps_flag(&arg.to_string_lossy()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn push_auto_install_peers_false(out: &mut Vec<OsString>) {
+    if out.iter().any(|arg| arg == AUTO_INSTALL_PEERS_FALSE) {
+        return;
+    }
+    out.push(OsString::from(AUTO_INSTALL_PEERS_FALSE));
+}
+
+fn apply_legacy_peer_deps_mapping(original: &[OsString], out: &mut Vec<OsString>) {
+    if args_have_enabled_legacy_peer_deps(original) {
+        push_auto_install_peers_false(out);
+    }
+}
+
+fn map_legacy_peer_deps_args(args: &[OsString]) -> Vec<OsString> {
+    let mut out = Vec::with_capacity(args.len() + 1);
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--" {
+            apply_legacy_peer_deps_mapping(args, &mut out);
             out.extend_from_slice(&args[i..]);
-            break;
+            return out;
+        }
+        if is_dropped_legacy_peer_deps_flag(&args[i].to_string_lossy()) {
+            i += 1;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    apply_legacy_peer_deps_mapping(args, &mut out);
+    out
+}
+
+fn translate_install_package_args(args: &[OsString]) -> Option<Vec<OsString>> {
+    let mut out = Vec::with_capacity(args.len() + 1);
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--" {
+            apply_legacy_peer_deps_mapping(args, &mut out);
+            out.extend_from_slice(&args[i..]);
+            return Some(out);
         }
         if skip_install_layout_arg(args, &mut i)? {
             continue;
@@ -239,16 +297,18 @@ fn translate_install_package_args(args: &[OsString]) -> Option<Vec<OsString>> {
         }
         i += 1;
     }
+    apply_legacy_peer_deps_mapping(args, &mut out);
     Some(out)
 }
 
 fn translate_project_install_args(args: &[OsString]) -> Option<Vec<OsString>> {
-    let mut out = Vec::with_capacity(args.len());
+    let mut out = Vec::with_capacity(args.len() + 1);
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--" {
+            apply_legacy_peer_deps_mapping(args, &mut out);
             out.extend_from_slice(&args[i..]);
-            break;
+            return Some(out);
         }
         if skip_install_layout_arg(args, &mut i)? {
             continue;
@@ -273,6 +333,7 @@ fn translate_project_install_args(args: &[OsString]) -> Option<Vec<OsString>> {
         out.push(args[i].clone());
         i += 1;
     }
+    apply_legacy_peer_deps_mapping(args, &mut out);
     Some(out)
 }
 
@@ -294,15 +355,12 @@ fn skip_install_layout_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
         return None;
     }
 
-    if arg == "--legacy-bundling"
-        || arg == "--global-style"
-        || arg == "--legacy-peer-deps"
-        || arg == "--strict-peer-deps"
-    {
+    if arg == "--legacy-bundling" || arg == "--global-style" || arg == "--strict-peer-deps" {
         return None;
     }
     if arg == "--no-legacy-bundling"
         || arg == "--no-global-style"
+        || arg == "--legacy-peer-deps"
         || arg == "--no-legacy-peer-deps"
         || arg == "--no-strict-peer-deps"
     {
@@ -310,12 +368,15 @@ fn skip_install_layout_arg(args: &[OsString], i: &mut usize) -> Option<bool> {
         return Some(true);
     }
 
-    for name in [
-        "legacy-bundling",
-        "global-style",
-        "legacy-peer-deps",
-        "strict-peer-deps",
-    ] {
+    if let Some(value) = arg.strip_prefix("--legacy-peer-deps=") {
+        if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+            *i += 1;
+            return Some(true);
+        }
+        return None;
+    }
+
+    for name in ["legacy-bundling", "global-style", "strict-peer-deps"] {
         if let Some(value) = arg.strip_prefix(&format!("--{name}=")) {
             if value.eq_ignore_ascii_case("false") {
                 *i += 1;
@@ -860,25 +921,81 @@ mod tests {
     }
 
     #[test]
-    fn npm_install_peer_resolution_flags_use_real_npm() {
+    fn npm_install_strict_peer_deps_uses_real_npm() {
         for args in [
-            &["install", "--legacy-peer-deps"][..],
             &["ci", "--strict-peer-deps"][..],
-            &["install", "--legacy-peer-deps=true", "react"][..],
-            &["--legacy-peer-deps", "install", "react"][..],
-            &[
-                "install",
-                "@mwolson-org/pi-xai-ws@latest",
-                "--prefix",
-                "/tmp/pi-extensions",
-                "--legacy-peer-deps",
-            ][..],
+            &["install", "--strict-peer-deps=true", "react"][..],
         ] {
             let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
 
             assert_eq!(plan.target, Target::RealNpm, "args={args:?}");
             assert_eq!(strings(&plan.args), args);
         }
+    }
+
+    #[test]
+    fn npm_install_legacy_peer_deps_stays_on_aube_without_auto_peers() {
+        for (args, expected) in [
+            (
+                &["install", "--legacy-peer-deps"][..],
+                vec!["install", "--config.auto-install-peers=false"],
+            ),
+            (
+                &["install", "--legacy-peer-deps=true", "react"][..],
+                vec!["add", "react", "--config.auto-install-peers=false"],
+            ),
+            (
+                &["--legacy-peer-deps", "install", "react"][..],
+                vec!["--config.auto-install-peers=false", "add", "react"],
+            ),
+            (
+                &[
+                    "install",
+                    "@mwolson-org/pi-xai-ws@latest",
+                    "--prefix",
+                    "/tmp/pi-extensions",
+                    "--legacy-peer-deps",
+                ][..],
+                vec![
+                    "add",
+                    "@mwolson-org/pi-xai-ws@latest",
+                    "--prefix",
+                    "/tmp/pi-extensions",
+                    "--config.auto-install-peers=false",
+                ],
+            ),
+        ] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn npm_uninstall_legacy_peer_deps_stays_on_aube() {
+        let plan = plan(
+            &os(&[
+                "uninstall",
+                "react",
+                "--prefix",
+                "packages/app",
+                "--legacy-peer-deps",
+            ]),
+            ResolvedGlobalBackend::Mise,
+        );
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(
+            strings(&plan.args),
+            vec![
+                "remove",
+                "react",
+                "--prefix",
+                "packages/app",
+                "--config.auto-install-peers=false",
+            ]
+        );
     }
 
     #[test]

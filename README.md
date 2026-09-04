@@ -257,6 +257,11 @@ configured value for one shell session or command with
 - npm-shimmed `aube` commands set `AUBE_NODE_LINKER=hoisted` for that invocation
   unless a node-linker env var is already set. This matches npm's hoisted
   `node_modules` shape without writing `.npmrc`.
+- npm-shimmed `aube` commands set `AUBE_MINIMUM_PACKAGE_AGE=0` unless that env
+  var (or `NPM_CONFIG_MINIMUM_PACKAGE_AGE` / `npm_config_minimum_package_age`)
+  is already set. npm has no 30-day new-name gate, and non-interactive tools
+  such as `pi update --extensions` would otherwise fail on recently published
+  packages.
 - Aube-backed `bun`, `pnpm`, and `yarn` commands also set
   `AUBE_NODE_LINKER=hoisted` when the current directory matches a `hoisted`
   config glob, unless a node-linker env var is already set.
@@ -307,10 +312,12 @@ fall back to the real npm:
   as mise can consume npm's registry metadata format.
 - `npm publish` and `npm unpublish` fall back to preserve npm's registry, auth,
   access, provenance, OTP, tag, workspace, and lifecycle semantics.
-- `npm install --legacy-peer-deps` and `npm install --strict-peer-deps` fall
-  back because aube rejects those flags and does not implement npm's legacy or
-  strict peer-resolution modes. The disabled forms (`--no-legacy-peer-deps`,
-  `--strict-peer-deps=false`) are dropped so the install can stay on aube.
+- `npm install --legacy-peer-deps` stays on aube and adds
+  `--config.auto-install-peers=false`, which matches npm's "do not auto-install
+  peers" behavior. `npm install --strict-peer-deps` still falls back because
+  aube's strict peer mode is a different diagnostic surface. The disabled forms
+  (`--no-legacy-peer-deps`, `--strict-peer-deps=false`) are dropped so the
+  install can stay on aube.
 - npm-only commands such as `npm pkg`, `npm search`, and `npm whoami` fall back
   to the real npm.
 
