@@ -51,13 +51,14 @@ fn run_version(tool: ShimTool, args: &[OsString]) -> Result<ExitStatus> {
 
     if output.status.success() {
         if !output.stdout.is_empty() && !output.stdout.ends_with(b"\n") {
-            println!();
+            writeln!(io::stdout())?;
         }
         let aube_version = aube_version()?;
-        println!(
+        writeln!(
+            io::stdout(),
             "(shimmed by aubeshim v{} to aube v{aube_version})",
             env!("CARGO_PKG_VERSION")
-        );
+        )?;
     }
 
     Ok(output.status)
@@ -140,7 +141,7 @@ fn run_mise_global_list(args: &[OsString]) -> Result<i32> {
 
     let tools = read_global_mise_npm_tools(&mise)?;
     if has_json_arg(args) {
-        println!("{}", serde_json::to_string_pretty(&tools)?);
+        writeln!(io::stdout(), "{}", serde_json::to_string_pretty(&tools)?)?;
         return Ok(0);
     }
 
@@ -160,9 +161,9 @@ fn run_mise_global_outdated(args: &[OsString]) -> Result<i32> {
     let names = tool_names(&tools);
     if names.is_empty() {
         if has_json_arg(args) {
-            println!("{{}}");
+            writeln!(io::stdout(), "{{}}")?;
         } else {
-            println!("mise All tools are up to date");
+            writeln!(io::stdout(), "mise All tools are up to date")?;
         }
         return Ok(0);
     }
