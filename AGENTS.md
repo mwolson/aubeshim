@@ -87,6 +87,27 @@ Before creating or updating a repro:
    filing does not notify maintainers, and discussion authors cannot delete a
    mis-filed discussion, only close it.
 
+When a maintainer asks for a test against an unreleased fix PR, use the PR's CI
+artifact instead of building aube locally:
+
+1. Find the PR's `ci` workflow run and confirm its `head_sha` matches the PR
+   head. The `ci / build (ubuntu-latest)` job uploads an `aube-ubuntu-latest`
+   artifact once it finishes, even while other jobs are still running.
+2. Download it into the repro repo's ignored `tmp/`:
+
+   ```sh
+   gh run download <run-id> -R aubepkg/aube -n aube-ubuntu-latest \
+       -D tmp/aube-pr<n>
+   chmod +x tmp/aube-pr<n>/aube
+   ```
+
+   It is a debug build and reports a version like `2.6.1-DEBUG`.
+
+3. Run the case with `AUBE_BIN=../tmp/aube-pr<n>/aube ./repro.sh`, then run it
+   again with the released `aube` as a same-machine control. Report both results
+   on the discussion with the PR head SHA. Leave the case under Open until a
+   release ships the fix.
+
 When an upstream discussion is fixed:
 
 1. Retest the minimal repro with the current `aube --version` and update the
