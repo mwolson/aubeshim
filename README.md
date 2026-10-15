@@ -276,7 +276,8 @@ configured value for one shell session or command with
   Yarn-specific management commands fall back to the real Yarn binary.
 - `bun` routes package-manager commands such as `bun install`, `bun add`, and
   `bun run` to `aube`; runtime commands and unknown commands fall back to the
-  real Bun binary.
+  real Bun binary. On aube-routed commands, `--cwd <dir>` becomes aube's
+  `--dir <dir>`, which also walks up to the nearest `package.json`.
 - One-off runner shims route compatible commands to `aube dlx`. That includes
   `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
 - For `pnpm dlx`, `pnpx`, and `pnx`, `--allow-build <package>` flags are

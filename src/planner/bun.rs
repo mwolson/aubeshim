@@ -58,7 +58,7 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
     }
 
     let mut out = Vec::with_capacity(args.len());
-    out.extend_from_slice(prefix);
+    out.extend(translate_cwd_args(prefix));
     out.push(OsString::from(command));
     if command == "install" {
         let Some(translated) = translate_omit_args(rest) else {
@@ -67,14 +67,37 @@ pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> 
                 args: args.to_vec(),
             };
         };
-        out.extend(translated);
+        out.extend(translate_cwd_args(&translated));
     } else {
-        out.extend_from_slice(rest);
+        out.extend(translate_cwd_args(rest));
     }
     Plan {
         target: Target::Aube,
         args: out,
     }
+}
+
+// Bun's package-manager `--cwd` walks up to the nearest package.json, the same
+// as aube's `--dir`. aube has no `--cwd` and would read it as a package name.
+fn translate_cwd_args(args: &[OsString]) -> Vec<OsString> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--" {
+            out.extend_from_slice(&args[i..]);
+            break;
+        }
+        if arg == "--cwd" {
+            out.push(OsString::from("--dir"));
+        } else if let Some(value) = arg.strip_prefix("--cwd=") {
+            out.push(OsString::from(format!("--dir={value}")));
+        } else {
+            out.push(args[i].clone());
+        }
+        i += 1;
+    }
+    out
 }
 
 pub(super) fn plan_bunx(args: &[OsString]) -> Plan {
@@ -390,6 +413,33 @@ mod tests {
 
         assert_eq!(plan.target, Target::Aube);
         assert_eq!(strings(&plan.args), vec!["install", "--frozen-lockfile"]);
+    }
+
+    #[test]
+    fn bun_cwd_becomes_aube_dir() {
+        for (args, expected) in [
+            (
+                &["add", "--cwd", "tools/app", "is-number@7.0.0"][..],
+                vec!["add", "--dir", "tools/app", "is-number@7.0.0"],
+            ),
+            (
+                &["install", "--cwd=tools/app", "--omit", "optional"][..],
+                vec!["install", "--dir=tools/app", "--no-optional"],
+            ),
+            (
+                &["--cwd=tools/app", "remove", "react"][..],
+                vec!["--dir=tools/app", "remove", "react"],
+            ),
+            (
+                &["update", "--cwd", "tools/app"][..],
+                vec!["update", "--dir", "tools/app"],
+            ),
+        ] {
+            let plan = plan(&os(args), ResolvedGlobalBackend::Mise);
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), expected, "args={args:?}");
+        }
     }
 
     #[test]
