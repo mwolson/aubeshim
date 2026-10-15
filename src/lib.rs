@@ -293,6 +293,50 @@ mod tests {
     }
 
     #[test]
+    fn bun_run_existing_relative_path_uses_real_bun() {
+        let repo = repo_fixture();
+        fs::create_dir_all(repo.cwd.join("scripts/release")).unwrap();
+        fs::write(repo.cwd.join("scripts/release/index.ts"), "").unwrap();
+        fs::write(repo.cwd.join("tool"), "").unwrap();
+        fs::write(
+            repo.cwd.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        for args in [
+            vec!["run", "scripts/release", "1.2.0", "--dry-run"],
+            vec!["run", "scripts/release"],
+            vec!["run", "tool"],
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::RealBun, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_script_or_missing_path_stays_on_aube() {
+        let repo = repo_fixture();
+        fs::create_dir_all(repo.cwd.join("dev")).unwrap();
+        fs::write(
+            repo.cwd.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        for args in [vec!["run", "dev"], vec!["run", "scripts/missing"]] {
+            let plan =
+                plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
     fn npm_prefix_with_package_json_stays_on_aube() {
         let repo = repo_fixture();
         fs::write(repo.cwd.join("package.json"), "{}").unwrap();

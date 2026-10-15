@@ -380,6 +380,50 @@ fn is_bun_runtime_flag(arg: &str) -> bool {
     ) || matches!(arg, "-b" | "-e" | "-i" | "-p" | "-r")
 }
 
+// `bun run scripts/export` (a dir with index.ts) has no `./` or extension, so
+// only the filesystem can tell it from a script name; package.json scripts win.
+pub(super) fn run_target_is_local_path(args: &[OsString], cwd: &Path) -> bool {
+    let Some(command_idx) = command_index(args) else {
+        return false;
+    };
+    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+    if normalize_bun_command(&command) != Some("run") {
+        return false;
+    }
+    let Some(target) = run_target(&args[command_idx + 1..]) else {
+        return false;
+    };
+    cwd.join(&target).exists() && !is_package_script(&target, cwd)
+}
+
+fn run_target(rest: &[OsString]) -> Option<String> {
+    for arg in rest {
+        let arg = arg.to_string_lossy();
+        if arg == "--" {
+            return None;
+        }
+        if !arg.starts_with('-') {
+            return Some(arg.into_owned());
+        }
+    }
+    None
+}
+
+fn is_package_script(name: &str, cwd: &Path) -> bool {
+    let Some(manifest) = cwd
+        .ancestors()
+        .map(|dir| dir.join("package.json"))
+        .find(|path| path.is_file())
+    else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(manifest) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .is_ok_and(|value| value.get("scripts").and_then(|s| s.get(name)).is_some())
+}
+
 fn looks_like_file_entrypoint(arg: &str) -> bool {
     arg == "-"
         || arg.starts_with("./")

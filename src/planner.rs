@@ -78,6 +78,12 @@ pub fn plan_for_config(
                 args: args.to_vec(),
             });
         }
+        if tool == ShimTool::Bun && bun::run_target_is_local_path(args, cwd) {
+            return Ok(Plan {
+                target: Target::RealBun,
+                args: args.to_vec(),
+            });
+        }
         let packages = global_package_names_for_resolution(tool, args);
         let global_backend = resolve_backend(config.global_packages, &packages)?;
         return plan_for_global_packages(tool, args, global_backend);
