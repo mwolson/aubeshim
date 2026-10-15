@@ -16,9 +16,18 @@ const MIN_MISE_VERSION: &str = "2026.5.6";
 pub fn exec_shim(tool: ShimTool, args: &[OsString]) -> Result<()> {
     let config = load_config()?;
     let cwd = env::current_dir().context("could not determine current directory")?;
+    let shim = should_shim(&config, &cwd)?;
+    if debug_enabled() {
+        debug_line(&format!(
+            "{} {} (cwd={}, shim={shim})",
+            tool.name(),
+            shell_words(args),
+            cwd.display()
+        ));
+    }
 
     if is_version_request(args) {
-        let status = if should_shim(&config, &cwd)? {
+        let status = if shim {
             run_version(tool, args)?
         } else {
             // Passthrough version has no aube linker env.
@@ -41,6 +50,14 @@ fn is_version_request(args: &[OsString]) -> bool {
 
 fn run_version(tool: ShimTool, args: &[OsString]) -> Result<ExitStatus> {
     let real_tool = resolve_real_tool(tool)?;
+    if debug_enabled() {
+        debug_route(
+            &format!("real {} with aube version hint", tool.name()),
+            &[],
+            &real_tool,
+            args,
+        );
+    }
     let output = ProcessCommand::new(&real_tool)
         .args(args)
         .output()
@@ -85,6 +102,18 @@ fn real_target_for(tool: ShimTool) -> Target {
 }
 
 fn run_plan(tool: Option<ShimTool>, plan: Plan, force_hoisted: bool) -> Result<i32> {
+    if debug_enabled()
+        && matches!(
+            plan.target,
+            Target::MiseGlobalList | Target::MiseGlobalOutdated
+        )
+    {
+        debug_line(&format!(
+            "-> {}: {}",
+            target_label(plan.target),
+            shell_words(&plan.args)
+        ));
+    }
     match plan.target {
         Target::MiseGlobalList => return run_mise_global_list(&plan.args),
         Target::MiseGlobalOutdated => return run_mise_global_outdated(&plan.args),
@@ -100,34 +129,90 @@ fn run_external_plan(
     force_hoisted: bool,
 ) -> Result<ExitStatus> {
     let program = resolve_target(plan.target)?;
-    let mut cmd = ProcessCommand::new(&program);
-    cmd.args(&plan.args);
+    let mut envs = Vec::new();
 
     if let Some(tool) = tool {
-        if let Some((key, value)) =
-            aube_node_linker_env(tool, plan.target, node_linker_env_is_set(), force_hoisted)
-        {
-            cmd.env(key, value);
-        }
-        if let Some((key, value)) =
-            npm_minimum_package_age_env(tool, plan.target, minimum_package_age_env_is_set())
-        {
-            cmd.env(key, value);
-        }
+        envs.extend(aube_node_linker_env(
+            tool,
+            plan.target,
+            node_linker_env_is_set(),
+            force_hoisted,
+        ));
+        envs.extend(npm_minimum_package_age_env(
+            tool,
+            plan.target,
+            minimum_package_age_env_is_set(),
+        ));
         // Script commands can auto-install, so apply the safe default to every Aube-backed plan.
         if safe_package_import_method_env(tool, plan.target, false).is_some() {
-            if let Some((key, value)) = safe_package_import_method_env(
+            envs.extend(safe_package_import_method_env(
                 tool,
                 plan.target,
                 package_import_method_is_explicit(&plan.args)?,
-            ) {
-                cmd.env(key, value);
-            }
+            ));
         }
     }
 
+    if debug_enabled() {
+        debug_route(target_label(plan.target), &envs, &program, &plan.args);
+    }
+    let mut cmd = ProcessCommand::new(&program);
+    cmd.args(&plan.args).envs(envs);
     cmd.status()
         .with_context(|| format!("failed to run {}", PathBuf::from(program).display()))
+}
+
+fn debug_enabled() -> bool {
+    env::var_os("AUBESHIM_DEBUG").is_some_and(|value| !value.is_empty())
+}
+
+fn debug_route(label: &str, envs: &[(&str, &str)], program: &OsStr, args: &[OsString]) {
+    let mut words: Vec<String> = envs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    words.push(shell_word(&program.to_string_lossy()));
+    if !args.is_empty() {
+        words.push(shell_words(args));
+    }
+    debug_line(&format!("-> {label}: {}", words.join(" ")));
+}
+
+fn debug_line(message: &str) {
+    let _ = writeln!(io::stderr(), "aubeshim: {message}");
+}
+
+fn shell_words(args: &[OsString]) -> String {
+    args.iter()
+        .map(|arg| shell_word(&arg.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "@%+=:,./_-~^".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
+fn target_label(target: Target) -> &'static str {
+    match target {
+        Target::Aube => "aube",
+        Target::Mise => "mise",
+        Target::MiseGlobalList => "mise global list",
+        Target::MiseGlobalOutdated => "mise global outdated",
+        Target::RealBun => "real bun",
+        Target::RealBunx => "real bunx",
+        Target::RealNpm => "real npm",
+        Target::RealNpx => "real npx",
+        Target::RealPnpm => "real pnpm",
+        Target::RealPnpx => "real pnpx",
+        Target::RealPnx => "real pnx",
+        Target::RealYarn => "real yarn",
+    }
 }
 
 fn run_mise_global_list(args: &[OsString]) -> Result<i32> {

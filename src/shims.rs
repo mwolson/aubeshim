@@ -25,6 +25,21 @@ pub enum ShimTool {
     Yarn,
 }
 
+impl ShimTool {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            ShimTool::Bun => "bun",
+            ShimTool::Bunx => "bunx",
+            ShimTool::Npm => "npm",
+            ShimTool::Npx => "npx",
+            ShimTool::Pnpm => "pnpm",
+            ShimTool::Pnpx => "pnpx",
+            ShimTool::Pnx => "pnx",
+            ShimTool::Yarn => "yarn",
+        }
+    }
+}
+
 pub fn invocation_from_argv0(argv0: Option<&OsString>) -> Invocation {
     let Some(argv0) = argv0 else {
         return Invocation::Manager;

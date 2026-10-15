@@ -202,6 +202,10 @@ Environment variables can override tool discovery:
 
 - `AUBESHIM_CONFIG`: path to the aubeshim config file.
 - `AUBESHIM_AUBE`: path to the aube binary.
+- `AUBESHIM_DEBUG`: when set to any non-empty value, print the invocation, its
+  cwd, whether aubeshim is shimming there, and the command it runs (with any env
+  it injects, such as `AUBE_NODE_LINKER=hoisted`) to stderr as `aubeshim: ...`
+  lines.
 - `AUBESHIM_REAL_BUN`: path to the real Bun binary.
 - `AUBESHIM_REAL_BUNX`: path to the real bunx binary.
 - `AUBESHIM_REAL_NPM`: path to the real npm binary.
