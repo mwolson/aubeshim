@@ -312,6 +312,13 @@ fall back to the real npm:
   as mise can consume npm's registry metadata format.
 - `npm publish` and `npm unpublish` fall back to preserve npm's registry, auth,
   access, provenance, OTP, tag, workspace, and lifecycle semantics.
+- Local commands with an explicit `--prefix <dir>` or `-C <dir>` fall back when
+  `<dir>` has no `package.json`. npm uses an explicit prefix as the project root
+  as-is, while aube walks up to the nearest ancestor `package.json` and would
+  edit that project instead. This keeps tool installers such as
+  `npm install --prefix <staging-dir> <pkg>@<version>` working, including their
+  dependencies' install scripts. Global (`-g`) commands keep their
+  `global_packages` routing.
 - `npm install --legacy-peer-deps` stays on aube and adds
   `--config.auto-install-peers=false`, which matches npm's "do not auto-install
   peers" behavior. `npm install --strict-peer-deps` still falls back because

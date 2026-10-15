@@ -257,6 +257,111 @@ mod tests {
     }
 
     #[test]
+    fn npm_prefix_without_package_json_passes_through_to_real_npm() {
+        let repo = repo_fixture();
+        let staging = repo.root.join("tools/expo-device-hub/0.15.3");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(repo.root.join("package.json"), "{}").unwrap();
+        let staging = staging.to_string_lossy().into_owned();
+        let prefix_arg = format!("--prefix={staging}");
+        let missing = repo.root.join("missing").to_string_lossy().into_owned();
+
+        for args in [
+            vec![
+                "install",
+                "--prefix",
+                &staging,
+                "--no-fund",
+                "--no-audit",
+                "expo-device-hub@0.15.3",
+            ],
+            vec!["--prefix", &staging, "install", "react"],
+            vec!["install", &prefix_arg, "react"],
+            vec!["-C", &staging, "add", "react"],
+            vec!["install", "--prefix", &staging],
+            vec!["install", "--prefix", &missing, "react"],
+            vec!["install", "--prefix", "../../tools/expo-device-hub/0.15.3"],
+            vec!["uninstall", "react", "--prefix", &staging],
+            vec!["run", "build", "--prefix", &staging],
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Npm, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::RealNpm, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn npm_prefix_with_package_json_stays_on_aube() {
+        let repo = repo_fixture();
+        fs::write(repo.cwd.join("package.json"), "{}").unwrap();
+        let cwd = repo.cwd.to_string_lossy().into_owned();
+
+        for (args, expected) in [
+            (
+                vec!["install", "--prefix", &cwd, "react"],
+                vec!["add", "--prefix", &cwd, "react"],
+            ),
+            (
+                vec!["install", "--prefix", "."],
+                vec!["install", "--prefix", "."],
+            ),
+            (
+                vec!["--prefix", "../app", "run", "build"],
+                vec!["--prefix", "../app", "run", "build"],
+            ),
+            (
+                vec!["install", "--", "--prefix"],
+                vec!["add", "--", "--prefix"],
+            ),
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Npm, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), expected);
+        }
+    }
+
+    #[test]
+    fn npm_global_prefix_keeps_global_package_routing() {
+        let _env = crate::globals::test_env_lock::shared();
+        let repo = repo_fixture();
+        let staging = repo.root.join("global-prefix");
+        fs::create_dir_all(&staging).unwrap();
+        let staging = staging.to_string_lossy().into_owned();
+        let config = Config {
+            global_packages: GlobalPackages::Mise,
+            ..Config::default()
+        };
+        let plan = plan_for_config(
+            ShimTool::Npm,
+            &os(&["install", "-g", "--prefix", &staging, "prettier"]),
+            &config,
+            &repo.cwd,
+        )
+        .unwrap();
+
+        assert_eq!(plan.target, Target::Mise);
+        assert_eq!(strings(&plan.args), vec!["use", "-g", "npm:prettier"]);
+    }
+
+    #[test]
+    fn pnpm_dir_without_package_json_stays_on_aube() {
+        let repo = repo_fixture();
+        let staging = repo.root.join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let staging = staging.to_string_lossy().into_owned();
+        let args = ["add", "react", "--dir", &staging];
+        let plan =
+            plan_for_config(ShimTool::Pnpm, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+        assert_eq!(plan.target, Target::Aube);
+        assert_eq!(strings(&plan.args), args);
+    }
+
+    #[test]
     fn parses_config_file() {
         let config = parse_config(
             r#"

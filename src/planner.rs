@@ -72,6 +72,12 @@ pub fn plan_for_config(
     cwd: &Path,
 ) -> Result<Plan> {
     if should_shim(config, cwd)? {
+        if tool == ShimTool::Npm && npm::prefix_lacks_package_json(args, cwd) {
+            return Ok(Plan {
+                target: Target::RealNpm,
+                args: args.to_vec(),
+            });
+        }
         let packages = global_package_names_for_resolution(tool, args);
         let global_backend = resolve_backend(config.global_packages, &packages)?;
         return plan_for_global_packages(tool, args, global_backend);

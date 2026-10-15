@@ -4,8 +4,10 @@ use super::{
     short_install_flag_takes_value, GlobalPackageAction, Plan, Target,
 };
 use crate::globals::ResolvedGlobalBackend;
+use crate::home_dir;
 use anyhow::{bail, Result};
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 pub(super) fn ensure_supported_command(args: &[OsString]) -> Result<()> {
     let Some(command_idx) = command_index(args) else {
@@ -16,6 +18,52 @@ pub(super) fn ensure_supported_command(args: &[OsString]) -> Result<()> {
         bail!("npm removed the `bin` command; use `pnpm bin` or `aube bin` instead");
     }
     Ok(())
+}
+
+// npm uses an explicit local `--prefix` as the project root as-is, while aube
+// walks up from it to the nearest `package.json`. Only the real npm can target
+// a directory that is not a package root yet, such as a tool staging dir.
+pub(super) fn prefix_lacks_package_json(args: &[OsString], cwd: &Path) -> bool {
+    if has_global_marker(args) {
+        return false;
+    }
+    let Some(prefix) = explicit_prefix(args) else {
+        return false;
+    };
+    !resolve_prefix(&prefix, cwd).join("package.json").is_file()
+}
+
+fn explicit_prefix(args: &[OsString]) -> Option<String> {
+    let mut prefix = None;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        if arg == "--" {
+            break;
+        }
+        if arg == "--prefix" || arg == "-C" {
+            prefix = args
+                .get(i + 1)
+                .map(|value| value.to_string_lossy().into_owned());
+            i += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--prefix=") {
+            prefix = Some(value.to_owned());
+        }
+        i += 1;
+    }
+    prefix.filter(|value| !value.is_empty())
+}
+
+fn resolve_prefix(prefix: &str, cwd: &Path) -> PathBuf {
+    if prefix == "~" {
+        return home_dir();
+    }
+    if let Some(rest) = prefix.strip_prefix("~/") {
+        return home_dir().join(rest);
+    }
+    cwd.join(prefix)
 }
 
 pub(super) fn plan(args: &[OsString], global_backend: ResolvedGlobalBackend) -> Plan {
