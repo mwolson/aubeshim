@@ -328,7 +328,7 @@ mod tests {
         fs::create_dir_all(repo.cwd.join("web")).unwrap();
         fs::write(
             repo.root.join("package.json"),
-            r#"{"scripts":{"dev":"next dev"}}"#,
+            r#"{"workspaces":["packages/*"],"scripts":{"dev":"next dev"}}"#,
         )
         .unwrap();
 
@@ -344,6 +344,27 @@ mod tests {
                 plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
 
             assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_filter_without_workspace_root_uses_real_bun() {
+        let repo = repo_fixture();
+        fs::write(
+            repo.cwd.join("package.json"),
+            r#"{"name":"app","scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        for args in [
+            vec!["run", "--filter", "app", "dev"],
+            vec!["run", "-F", "app", "dev"],
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::RealBun, "args={args:?}");
             assert_eq!(strings(&plan.args), args);
         }
     }

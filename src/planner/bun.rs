@@ -4,6 +4,7 @@ use super::{
     Target,
 };
 use crate::globals::ResolvedGlobalBackend;
+use crate::runtime::find_workspace_root;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
@@ -383,7 +384,9 @@ fn is_bun_runtime_flag(arg: &str) -> bool {
 // Bun resolves a `bun run` target as a package.json script, then a source file
 // (adding extensions and `index.*`), a bin, or a system command. aube run only
 // knows scripts and bins, so anything that is not a script goes to real bun.
-pub(super) fn run_target_is_not_script(args: &[OsString], cwd: &Path) -> bool {
+// aube also rejects `--filter` outside a workspace, where bun filters the lone
+// root project.
+pub(super) fn run_uses_real_bun_in(args: &[OsString], cwd: &Path) -> bool {
     let Some(command_idx) = command_index(args) else {
         return false;
     };
@@ -391,25 +394,35 @@ pub(super) fn run_target_is_not_script(args: &[OsString], cwd: &Path) -> bool {
     if normalize_bun_command(&command) != Some("run") {
         return false;
     }
-    let Some(target) = run_target(&args[command_idx + 1..]) else {
-        return false;
-    };
-    !is_package_script(&target, cwd)
+    match run_target(&args[command_idx + 1..]) {
+        RunTarget::Filtered => find_workspace_root(cwd).is_none(),
+        RunTarget::Name(target) => !is_package_script(&target, cwd),
+        RunTarget::Other => false,
+    }
+}
+
+enum RunTarget {
+    Filtered,
+    Name(String),
+    Other,
 }
 
 // Runtime flags already send `bun run` to real bun, and `--filter` names
 // scripts in workspace packages, so only a plain target needs the lookup.
-fn run_target(rest: &[OsString]) -> Option<String> {
+fn run_target(rest: &[OsString]) -> RunTarget {
     for arg in rest {
         let arg = arg.to_string_lossy();
-        if arg == "--" || arg == "-" || is_bun_runtime_flag(&arg) || is_bun_filter_flag(&arg) {
-            return None;
+        if is_bun_filter_flag(&arg) {
+            return RunTarget::Filtered;
+        }
+        if arg == "--" || arg == "-" || is_bun_runtime_flag(&arg) {
+            return RunTarget::Other;
         }
         if !arg.starts_with('-') {
-            return Some(arg.into_owned());
+            return RunTarget::Name(arg.into_owned());
         }
     }
-    None
+    RunTarget::Other
 }
 
 fn is_bun_filter_flag(arg: &str) -> bool {

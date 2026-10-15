@@ -282,9 +282,10 @@ configured value for one shell session or command with
   `bun run <script>` to `aube`; runtime commands and unknown commands fall back
   to the real Bun binary. `bun run <target>` also falls back to real Bun when
   `<target>` is not a script in the nearest `package.json`, since Bun then
-  resolves it as a file, directory, bin, or system command. On aube-routed
-  commands, `--cwd <dir>` becomes aube's `--dir <dir>`, which also walks up to
-  the nearest `package.json`.
+  resolves it as a file, directory, bin, or system command. `bun run --filter`
+  also falls back outside a workspace, where aube rejects `--filter` and Bun
+  filters the lone root project. On aube-routed commands, `--cwd <dir>` becomes
+  aube's `--dir <dir>`, which also walks up to the nearest `package.json`.
 - One-off runner shims route compatible commands to `aube dlx`. That includes
   `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
 - For `pnpm dlx`, `pnpx`, and `pnx`, `--allow-build <package>` flags are

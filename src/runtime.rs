@@ -426,19 +426,21 @@ fn project_declares_package_import_method(root: &Path) -> bool {
 }
 
 fn find_aube_project_root(cwd: &Path) -> Option<PathBuf> {
-    let mut package_root = None;
-    for dir in cwd.ancestors() {
-        if dir.join("aube-workspace.yaml").is_file()
-            || dir.join("pnpm-workspace.yaml").is_file()
-            || package_json_declares_workspaces(&dir.join("package.json"))
-        {
-            return Some(dir.to_path_buf());
-        }
-        if package_root.is_none() && dir.join("package.json").is_file() {
-            package_root = Some(dir.to_path_buf());
-        }
-    }
-    package_root
+    find_workspace_root(cwd).or_else(|| {
+        cwd.ancestors()
+            .find(|dir| dir.join("package.json").is_file())
+            .map(Path::to_path_buf)
+    })
+}
+
+pub(crate) fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
+    cwd.ancestors()
+        .find(|dir| {
+            dir.join("aube-workspace.yaml").is_file()
+                || dir.join("pnpm-workspace.yaml").is_file()
+                || package_json_declares_workspaces(&dir.join("package.json"))
+        })
+        .map(Path::to_path_buf)
 }
 
 fn package_json_declares_workspaces(path: &Path) -> bool {

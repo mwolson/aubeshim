@@ -78,7 +78,7 @@ pub fn plan_for_config(
                 args: args.to_vec(),
             });
         }
-        if tool == ShimTool::Bun && bun::run_target_is_not_script(args, cwd) {
+        if tool == ShimTool::Bun && bun::run_uses_real_bun_in(args, cwd) {
             return Ok(Plan {
                 target: Target::RealBun,
                 args: args.to_vec(),
