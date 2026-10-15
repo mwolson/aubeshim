@@ -293,6 +293,62 @@ mod tests {
     }
 
     #[test]
+    fn bun_run_non_script_target_uses_real_bun() {
+        let repo = repo_fixture();
+        fs::create_dir_all(repo.cwd.join("scripts/export")).unwrap();
+        fs::write(repo.cwd.join("scripts/export/index.ts"), "").unwrap();
+        fs::write(repo.cwd.join("scripts/build.ts"), "").unwrap();
+        fs::write(repo.cwd.join("tool"), "").unwrap();
+        fs::write(
+            repo.cwd.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        for args in [
+            vec!["run", "scripts/export", "1.2.0", "--dry-run"],
+            vec!["run", "scripts/build"],
+            vec!["run", "tool"],
+            vec!["run", "eslint", "."],
+            vec!["run", "ls"],
+            vec!["--silent", "run", "missing"],
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::RealBun, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_script_target_stays_on_aube() {
+        let repo = repo_fixture();
+        fs::create_dir_all(repo.cwd.join("dev")).unwrap();
+        fs::create_dir_all(repo.cwd.join("web")).unwrap();
+        fs::write(
+            repo.root.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        for args in [
+            vec!["run"],
+            vec!["run", "dev"],
+            vec!["run", "dev", "--port", "3000"],
+            vec!["run", "--filter", "web", "dev"],
+            vec!["run", "-F", "web", "build"],
+            vec!["run", "--filter=web", "build"],
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
     fn npm_prefix_with_package_json_stays_on_aube() {
         let repo = repo_fixture();
         fs::write(repo.cwd.join("package.json"), "{}").unwrap();

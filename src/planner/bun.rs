@@ -380,6 +380,57 @@ fn is_bun_runtime_flag(arg: &str) -> bool {
     ) || matches!(arg, "-b" | "-e" | "-i" | "-p" | "-r")
 }
 
+// Bun resolves a `bun run` target as a package.json script, then a source file
+// (adding extensions and `index.*`), a bin, or a system command. aube run only
+// knows scripts and bins, so anything that is not a script goes to real bun.
+pub(super) fn run_target_is_not_script(args: &[OsString], cwd: &Path) -> bool {
+    let Some(command_idx) = command_index(args) else {
+        return false;
+    };
+    let command = args[command_idx].to_string_lossy().to_ascii_lowercase();
+    if normalize_bun_command(&command) != Some("run") {
+        return false;
+    }
+    let Some(target) = run_target(&args[command_idx + 1..]) else {
+        return false;
+    };
+    !is_package_script(&target, cwd)
+}
+
+// Runtime flags already send `bun run` to real bun, and `--filter` names
+// scripts in workspace packages, so only a plain target needs the lookup.
+fn run_target(rest: &[OsString]) -> Option<String> {
+    for arg in rest {
+        let arg = arg.to_string_lossy();
+        if arg == "--" || arg == "-" || is_bun_runtime_flag(&arg) || is_bun_filter_flag(&arg) {
+            return None;
+        }
+        if !arg.starts_with('-') {
+            return Some(arg.into_owned());
+        }
+    }
+    None
+}
+
+fn is_bun_filter_flag(arg: &str) -> bool {
+    arg.starts_with("-F") || (arg.starts_with("--") && long_flag_name(arg) == "filter")
+}
+
+fn is_package_script(name: &str, cwd: &Path) -> bool {
+    let Some(manifest) = cwd
+        .ancestors()
+        .map(|dir| dir.join("package.json"))
+        .find(|path| path.is_file())
+    else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(manifest) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .is_ok_and(|value| value.get("scripts").and_then(|s| s.get(name)).is_some())
+}
+
 fn looks_like_file_entrypoint(arg: &str) -> bool {
     arg == "-"
         || arg.starts_with("./")
