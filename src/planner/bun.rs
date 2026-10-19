@@ -384,8 +384,8 @@ fn is_bun_runtime_flag(arg: &str) -> bool {
 // Bun resolves a `bun run` target as a package.json script, then a source file
 // (adding extensions and `index.*`), a bin, or a system command. aube run only
 // knows scripts and bins, so anything that is not a script goes to real bun.
-// aube also rejects `--filter` outside a workspace, where bun filters the lone
-// root project.
+// Outside a workspace, bun's `--filter '*'` selects the lone root project, while
+// aube follows pnpm and leaves the root out of `*`.
 pub(super) fn run_uses_real_bun_in(args: &[OsString], cwd: &Path) -> bool {
     let Some(command_idx) = command_index(args) else {
         return false;
@@ -394,8 +394,14 @@ pub(super) fn run_uses_real_bun_in(args: &[OsString], cwd: &Path) -> bool {
     if normalize_bun_command(&command) != Some("run") {
         return false;
     }
-    match run_target(&args[command_idx + 1..]) {
-        RunTarget::Filtered => find_workspace_root(cwd).is_none(),
+    let rest = &args[command_idx + 1..];
+    match run_target(rest) {
+        RunTarget::Filtered => {
+            filter_selectors(rest)
+                .iter()
+                .any(|selector| selector == "*")
+                && find_workspace_root(cwd).is_none()
+        }
         RunTarget::Name(target) => !is_package_script(&target, cwd),
         RunTarget::Other => false,
     }
@@ -427,6 +433,29 @@ fn run_target(rest: &[OsString]) -> RunTarget {
 
 fn is_bun_filter_flag(arg: &str) -> bool {
     arg.starts_with("-F") || (arg.starts_with("--") && long_flag_name(arg) == "filter")
+}
+
+// Selectors from the flags before the script name.
+fn filter_selectors(rest: &[OsString]) -> Vec<String> {
+    let mut selectors = Vec::new();
+    let mut args = rest.iter().map(|arg| arg.to_string_lossy());
+    while let Some(arg) = args.next() {
+        if !arg.starts_with('-') || arg == "--" {
+            break;
+        }
+        if !is_bun_filter_flag(&arg) {
+            continue;
+        }
+        let inline = match arg.strip_prefix("--") {
+            Some(long) => long.split_once('=').map(|(_, value)| value),
+            None => arg.strip_prefix("-F").filter(|value| !value.is_empty()),
+        };
+        match inline {
+            Some(value) => selectors.push(value.to_string()),
+            None => selectors.extend(args.next().map(|value| value.into_owned())),
+        }
+    }
+    selectors
 }
 
 fn is_package_script(name: &str, cwd: &Path) -> bool {

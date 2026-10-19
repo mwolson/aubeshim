@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn bun_run_filter_without_workspace_root_uses_real_bun() {
+    fn bun_run_filter_without_workspace_root_stays_on_aube() {
         let repo = repo_fixture();
         fs::write(
             repo.cwd.join("package.json"),
@@ -359,7 +359,31 @@ mod tests {
 
         for args in [
             vec!["run", "--filter", "app", "dev"],
-            vec!["run", "-F", "app", "dev"],
+            vec!["run", "--filter=./", "dev"],
+            vec!["run", "-F", "ap*", "dev"],
+            vec!["run", "-Fapp", "dev"],
+        ] {
+            let plan =
+                plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();
+
+            assert_eq!(plan.target, Target::Aube, "args={args:?}");
+            assert_eq!(strings(&plan.args), args);
+        }
+    }
+
+    #[test]
+    fn bun_run_filter_star_without_workspace_root_uses_real_bun() {
+        let repo = repo_fixture();
+        fs::write(
+            repo.cwd.join("package.json"),
+            r#"{"name":"app","scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        for args in [
+            vec!["run", "--filter", "*", "dev"],
+            vec!["run", "--filter=*", "dev"],
+            vec!["run", "-F", "app", "-F*", "dev"],
         ] {
             let plan =
                 plan_for_config(ShimTool::Bun, &os(&args), &Config::default(), &repo.cwd).unwrap();

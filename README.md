@@ -282,10 +282,12 @@ configured value for one shell session or command with
   `bun run <script>` to `aube`; runtime commands and unknown commands fall back
   to the real Bun binary. `bun run <target>` also falls back to real Bun when
   `<target>` is not a script in the nearest `package.json`, since Bun then
-  resolves it as a file, directory, bin, or system command. `bun run --filter`
-  also falls back outside a workspace, where aube rejects `--filter` and Bun
-  filters the lone root project. On aube-routed commands, `--cwd <dir>` becomes
-  aube's `--dir <dir>`, which also walks up to the nearest `package.json`.
+  resolves it as a file, directory, bin, or system command. Outside a workspace,
+  `bun run --filter` runs through aube, which selects the root project by name
+  from aube 2.7.2 on. A `*` selector there falls back to real Bun, since Bun's
+  `*` selects the lone root project and aube's `*` leaves the root out, as pnpm
+  does. On aube-routed commands, `--cwd <dir>` becomes aube's `--dir <dir>`,
+  which also walks up to the nearest `package.json`.
 - One-off runner shims route compatible commands to `aube dlx`. That includes
   `bunx`, `npx`, `pnpx`, `pnx`, `bun x`, `bun dlx`, and `pnpm dlx`.
 - For `pnpm dlx`, `pnpx`, and `pnx`, `--allow-build <package>` flags are
@@ -323,8 +325,9 @@ fall back to the real npm:
   access, provenance, OTP, tag, workspace, and lifecycle semantics.
 - Local commands with an explicit `--prefix <dir>` or `-C <dir>` fall back when
   `<dir>` has no `package.json`. npm uses an explicit prefix as the project root
-  as-is, while aube walks up to the nearest ancestor `package.json` and would
-  edit that project instead. This keeps tool installers such as
+  as-is. aube does the same for `add` from aube 2.7.1 on, but other commands
+  still walk up to the nearest ancestor `package.json`, and aube skips
+  dependency build scripts that npm runs. This keeps tool installers such as
   `npm install --prefix <staging-dir> <pkg>@<version>` working, including their
   dependencies' install scripts. Global (`-g`) commands keep their
   `global_packages` routing.
